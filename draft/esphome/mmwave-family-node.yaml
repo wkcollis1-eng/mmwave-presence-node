@@ -4,9 +4,29 @@
 # This file contains NOTHING but substitutions. All behaviour is in
 # mmwave-node-common.yaml, which both nodes share byte for byte.
 #
-# Install geometry (§5.1): sensor on the mantel at 1.3 m, seated torso at 0.9 m,
-# target at 4 m => 5.7 deg DOWN-tilt. Feet under the REAR edge — the opposite
-# tilt to the office node, which is the single easiest thing to get backwards.
+# Install geometry (§5.1). MANTEL HEIGHT MEASURED 2026-09-08: 52" = 1.321 m.
+# The design assumed 1.3 m; the measurement agrees to 21 mm, so the assumption
+# stands and is now a measurement. Recomputed against a seated torso at 0.9 m:
+#
+#     distance   depression      note
+#      2.00 m     11.9 deg       near sofa
+#      4.00 m      6.0 deg       the design target below (file previously said 5.7)
+#      5.23 m      4.6 deg       far OCCUPIABLE corner (counters, see §3.6)
+#
+# => 6.0 deg DOWN-tilt. Feet under the REAR edge — the opposite tilt to the
+# office node, which is the single easiest thing to get backwards.
+#
+# WHY 6 deg IS WELL CHOSEN, AND IT IS NOT ONLY ABOUT SEATED PEOPLE. At 1.321 m
+# the sensor sits BETWEEN a seated torso (0.9 m) and a standing one (~1.45 m),
+# so standing targets are ABOVE it and the angle inverts: +1.4 deg UP at the far
+# corner, +3.7 deg UP at 2 m. The full span this node must cover is therefore
+# 11.9 deg down (seated, near) to 1.4 deg up (standing, far) — about 13 deg,
+# comfortably inside the module's vertical beamwidth, and 6 deg down sits close
+# to its midpoint. A single fixed tilt cannot optimise both cases; this one does
+# not have to, because the span is narrow enough that centring it is sufficient.
+#
+# The seated case is still the one to favour if it ever comes to a choice: §1's
+# unattended moment is someone reading for ninety minutes without moving.
 #
 # This is the node the "unattended moment" in §1 was written about: 23:00, dark,
 # empty, someone walks in and reads for ninety minutes without moving.
