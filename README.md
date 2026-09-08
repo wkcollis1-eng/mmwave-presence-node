@@ -169,7 +169,7 @@ covered by this repository's own licences.
 
 | Asset | Origin | Note |
 |---|---|---|
-| `hardware/3d/LD2410C mmWave Sensor.step` | Community model | Creative Commons Non-Commercial — licence image ships in `ld2410c-mmwave-sensor-1.snapshot.2/` |
+| `hardware/3d/LD2410C mmWave Sensor.step` | [GrabCAD](https://grabcad.com/library/ld2410c-mmwave-sensor-1) | **CC BY-NC 4.0** — non-commercial; licence image ships in `ld2410c-mmwave-sensor-1.snapshot.2/` |
 | `hardware/3d/HLK-LD2410C-3D图/` | Hi-Link | Manufacturer 3D model |
 | `hardware/3d/Adafruit VEML7700.zip` | SnapMagic | Part models remain SnapMagic's intellectual property |
 | `docs/LD2410C Docs/*.pdf` | Hi-Link, Adafruit | Datasheet, serial protocol V1.07, VEML7700 guide |

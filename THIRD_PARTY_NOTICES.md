@@ -18,17 +18,20 @@ reference documents that never enter the manufacturing output.
   `hardware/3d/ld2410c-mmwave-sensor-1.snapshot.2/` and the `.zip` beside it
 - License: **Creative Commons Attribution-NonCommercial 4.0 International**
 - License file: `hardware/3d/ld2410c-mmwave-sensor-1.snapshot.2/Creative Commons Non-Commercial License.jpg`
+- Source: **GrabCAD** — https://grabcad.com/library/ld2410c-mmwave-sensor-1
 - Modifications: none
 - **This is the only non-commercially-licensed file in the repository.** It is
   the mesh shown for U2 in the 3D viewer. If you are doing anything commercial,
   delete these three paths and use the Hi-Link model below instead — the board,
   the gerbers and every other file remain usable, because this mesh contributes
   nothing to the fabrication outputs.
-- ⚠️ **Attribution is incomplete.** CC BY-NC requires credit to the author, and
-  the author is not recorded: the STEP header carries empty `author` and
-  `organization` fields, and the archive has no comment. The original download
-  URL is needed to complete this notice. Until it is supplied, anyone relying on
-  this file should obtain it from its original source rather than from here.
+- ⚠️ **The uploader's name is not yet recorded here.** CC BY-NC requires credit
+  to the author. The model's own metadata does not carry it — the STEP header
+  has empty `author` and `organization` fields and the archive has no comment —
+  and GrabCAD requires a login to view the uploader, so it could not be read
+  from the file or the public page. **Please obtain the model from the GrabCAD
+  link above rather than relying on this copy for attribution**, until the
+  uploader's name is added to this notice.
 
 ### HLK-LD2410C manufacturer mesh
 - Files: `hardware/3d/HLK-LD2410C-3D图/`, `hardware/3d/HLK-LD2410C-3D图.zip`,
