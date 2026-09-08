@@ -448,7 +448,18 @@ Drawing A101 (*Edgewater Hill Lot 15, dream developers, 1.31.2021*) gives **LIVI
 | far wall, on boresight | 17'-7" = **5.36 m** | 7 (5.25–6.00 m) |
 | far corners, diagonal | 19'-2" = **5.84 m** | 7 |
 
-**The far corners are 5.84 m, which is beyond the 5.6 m target.** The number was set before the room was measured and it covers the far *wall*, not the far *corners*. Not a large miss, but it means a person standing in a west corner is outside the stated acceptance range, and §5.2a should be read with that in mind.
+**MEASURE THE TARGET AGAINST OCCUPIABLE SPACE, NOT GEOMETRIC EXTENT.** The raw corner figure of 5.84 m exceeds the 5.6 m target, which on its own reads as a miss. It is not, because **nobody can stand there** — the far end carries counters and appliances (owner, 2026-09-07), so the furthest a person reaches is a counter depth short of the boundary:
+
+| measured to | on boresight | far corner |
+|---|---|---|
+| geometric room extent | 5.36 m | 5.84 m |
+| **occupiable space** (−24" counter) | **4.75 m** | **5.23 m** |
+
+**5.23 m sits inside the 5.6 m target with about 0.37 m of margin.** So §3.6 covers the space that matters, and §5.2a's acceptance walk should be conducted to the counter face rather than the wall.
+
+Two caveats on that arithmetic. 24" is a standard base-cabinet depth; **a refrigerator or range run is 30–36" and would push the occupiable limit further in**, giving more margin, not less. And the correction only applies where fixtures actually run — an open corner has none, so **the walk should establish the true furthest standing point rather than assume the counter line is continuous.**
+
+The general point is worth keeping even after this room is commissioned: **a detection-range requirement measured to a wall over-specifies the problem** wherever anything occupies the perimeter. Furniture, counters and appliances all buy range back for free.
 
 Note also that the corners sit only **23° off boresight** — well inside the ±60° cone. So §3.6's "angle matters far more" caveat, true in general, is **not** the binding constraint in this room. Range is.
 
