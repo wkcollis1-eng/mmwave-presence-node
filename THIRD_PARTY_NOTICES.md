@@ -18,6 +18,7 @@ reference documents that never enter the manufacturing output.
   `hardware/3d/ld2410c-mmwave-sensor-1.snapshot.2/` and the `.zip` beside it
 - License: **Creative Commons Attribution-NonCommercial 4.0 International**
 - License file: `hardware/3d/ld2410c-mmwave-sensor-1.snapshot.2/Creative Commons Non-Commercial License.jpg`
+- **Author: Ben Cooney**, published 7 February 2024
 - Source: **GrabCAD** — https://grabcad.com/library/ld2410c-mmwave-sensor-1
 - Modifications: none
 - **This is the only non-commercially-licensed file in the repository.** It is
@@ -25,13 +26,15 @@ reference documents that never enter the manufacturing output.
   delete these three paths and use the Hi-Link model below instead — the board,
   the gerbers and every other file remain usable, because this mesh contributes
   nothing to the fabrication outputs.
-- ⚠️ **The uploader's name is not yet recorded here.** CC BY-NC requires credit
-  to the author. The model's own metadata does not carry it — the STEP header
-  has empty `author` and `organization` fields and the archive has no comment —
-  and GrabCAD requires a login to view the uploader, so it could not be read
-  from the file or the public page. **Please obtain the model from the GrabCAD
-  link above rather than relying on this copy for attribution**, until the
-  uploader's name is added to this notice.
+- Attribution to use:
+
+  > "LD2410C mmWave Sensor" by **Ben Cooney**, licensed under CC BY-NC 4.0.
+  > https://grabcad.com/library/ld2410c-mmwave-sensor-1
+
+  The author is not recoverable from the file itself — the STEP header carries
+  empty `author` and `organization` fields and the archive has no comment — so
+  it is recorded here instead. The publication date matches the file: the STEP
+  header is stamped `2024-02-07` and both zip entries carry the same date.
 
 ### HLK-LD2410C manufacturer mesh
 - Files: `hardware/3d/HLK-LD2410C-3D图/`, `hardware/3d/HLK-LD2410C-3D图.zip`,
