@@ -1,0 +1,49 @@
+# =============================================================================
+# NODE 1 — OFFICE
+# -----------------------------------------------------------------------------
+# This file contains NOTHING but substitutions. All behaviour is in
+# mmwave-node-common.yaml, which both nodes share byte for byte.
+#
+# Install geometry (§5.1): sensor at 0.75 m on the desk, seated torso at 1.2 m,
+# target at 1.2 m => 19 deg UP-tilt. Feet under the FRONT edge.
+# The wall behind sits close (§3.7) — if §5.4 shows an odd g0/g1 floor here,
+# that near static return is the first place to look.
+# =============================================================================
+
+substitutions:
+  node_name: mmwave-office-node
+  friendly: Office mmWave
+  room_name: Office
+  room_slug: office
+  fw_version: "0.1-draft"
+
+  # Idle timeout, §5.5: office 60-120 s. The ROOM-level total lives in HA as
+  # input_number.mmw_office_idle_timeout (default 90 s). This is the MODULE's
+  # own hold only — short, so the two do not add. See TIMEOUT ARITHMETIC in the
+  # common file.
+  radar_timeout_s: "30"
+
+  # Placeholders. §5.2 replaces them with the first gate beyond the far wall,
+  # measured. A small office at 1.2 m working distance will likely land at
+  # gate 3-4 (2.25-3.0 m); do NOT ship these numbers as if they were measured.
+  max_move_gate: "4"
+  max_still_gate: "4"
+
+  gate_log_period: "5"
+
+  # Daily SPC window: 03:10, an hour the office is reliably empty, so it doubles
+  # as the clean noise-floor observation §6.1 asks for.
+  eng_window_hour: "3"
+  eng_window_minute: "10"
+
+  # --- COMMISSIONED GATE THRESHOLDS -----------------------------------------
+  # UNCALIBRATED. These are Hi-Link factory defaults inherited from the common
+  # file. After the §5.9 sweep, paste the analysis script's output block here,
+  # commit, and reflash. The commit hash is the calibration record (R9).
+  # scripts/mmwave_calibrate.py --room office --emit esphome
+
+esphome:
+  name: ${node_name}
+
+packages:
+  common: !include mmwave-node-common.yaml

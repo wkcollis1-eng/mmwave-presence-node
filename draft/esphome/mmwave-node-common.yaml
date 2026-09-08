@@ -1,0 +1,970 @@
+# =============================================================================
+# mmWave Presence Lighting Node — SHARED FIRMWARE BODY
+# XIAO ESP32-C3 + HLK-LD2410C + Adafruit VEML7700 (4162)
+# -----------------------------------------------------------------------------
+# Rev 0.1 DRAFT (2026-09-05) — NOT COMPILED. Every component key must be checked
+# against the pinned ESPHome version before first flash (design doc §5.11).
+#
+# ONE firmware, two nodes. Everything room-specific is a substitution set in the
+# per-device file (mmwave-office-node.yaml / mmwave-family-node.yaml), which
+# does nothing but override substitutions and include this file. The compiled
+# behaviour is identical; only names, defaults and the room tag differ. That is
+# what satisfies "same firmware, we choose what area it's in" without a runtime
+# mode switch that would have to be re-selected after every factory reset.
+#
+# WHY NOT A RUNTIME ROOM SELECTOR: every value that actually differs between the
+# two rooms (idle timeout, max gates, the 18 gate thresholds) is already a
+# `number` entity settable from HA at runtime. A room selector would be a second
+# way to set the same values, living in NVM instead of git — the exact thing R9
+# exists to prevent. The substitutions are the compile-time DEFAULTS; the number
+# entities are the runtime state; the YAML is the record. One source of truth.
+#
+# THREE DELIBERATE DEPARTURES FROM DESIGN DOC §4.1 — each argued at its site
+# below and summarised in DRAFT-NOTES.md:
+#   1. `delayed_on: 200ms` on the hardware OUT pin is REMOVED (it spends 20% of
+#      the R2 latency budget debouncing a driven CMOS output that cannot bounce)
+#   2. The VEML7700 sensor key is `ambient_light`, not `lux`
+#   3. The radar's own `timeout` is held SHORT and the room-level idle timeout
+#      lives in HA, so the two cannot be silently added together
+# =============================================================================
+
+substitutions:
+  # ---- identity (overridden per device) ------------------------------------
+  node_name: mmwave-node
+  friendly: mmWave Node
+  room_name: Room
+  room_slug: room
+  fw_version: "0.1-draft"
+
+  # ---- room-specific DEFAULTS (overridden per device) ----------------------
+  # The values the module boots with the first time. After §5.9 the commissioned
+  # values are written back HERE and reflashed — that is what R9 buys.
+  radar_timeout_s: "30"      # module-level hold; see TIMEOUT ARITHMETIC below
+  max_move_gate: "4"         # §5.2 sets this from the coverage sweep
+  max_still_gate: "4"
+  gate_log_period: "5"       # gate-energy publish period, SECONDS.
+                             # 5 s for the passive 48-72 h collection,
+                             # 1 s for focused 10-min seat runs. Runtime
+                             # adjustable — see RECORDER COST below.
+  eng_window_hour: "3"       # daily SPC window, §6.1 — a normally-empty hour
+  eng_window_minute: "10"
+
+  # ---- gate threshold DEFAULTS ---------------------------------------------
+  # Hi-Link factory defaults, restated explicitly so the flashed state is KNOWN
+  # rather than inherited from whatever happens to be in module NVM. Overwritten
+  # per room after §5.9. A node that has never been calibrated says so, because
+  # these are still the factory numbers and the YAML shows it.
+  #
+  # CORRECTED 2026-09-05 against the primary source: HLK-LD2410C Serial
+  # Communication Protocol V1.07, Table 7 "Factory default configuration
+  # values", p.15. An earlier draft of this file carried values written from
+  # memory; gates 3 through 8 were all wrong, and the comment above them
+  # claimed they were the manufacturer's table. They were not. The real table:
+  #
+  #     gate   move   still          gate   move   still
+  #      0      50     0 (inert)       5      15     30
+  #      1      50     0 (inert)       6      15     20
+  #      2      40     40             7      15     20
+  #      3      30     40             8      15     20
+  #      4      20     30
+  #
+  # Note the shape: move sensitivity FALLS with range (50 -> 15) while still
+  # sensitivity stays high in the mid gates. My invented numbers had move
+  # roughly flat at 40 and still far too low at the far gates, which would have
+  # made a freshly flashed node markedly deafer to a distant motionless person
+  # than a factory one — the exact R1 failure, shipped as a default.
+  g0_move: "50"
+  g0_still: "0"
+  g1_move: "50"
+  g1_still: "0"
+  g2_move: "40"
+  g2_still: "40"
+  g3_move: "30"
+  g3_still: "40"
+  g4_move: "20"
+  g4_still: "30"
+  g5_move: "15"
+  g5_still: "30"
+  g6_move: "15"
+  g6_still: "20"
+  g7_move: "15"
+  g7_still: "20"
+  g8_move: "15"
+  g8_still: "20"
+
+esphome:
+  name: ${node_name}
+  friendly_name: ${friendly}
+  # MECHANISED VERSION FLOOR — §5.11's freeze, asserted instead of documented.
+  # Borrowed from tobsch/ld2410. §5.11 says "pin the ESPHome version explicitly
+  # rather than tracking latest" and then relies on somebody remembering. This
+  # makes the build FAIL on anything older, which is the difference between a
+  # policy and a gate.
+  #
+  # 2026.4.3 is Bill's installed version and the floor these configs were
+  # validated against; they also pass on 2026.8.2. Raise it deliberately after
+  # re-running A1, A2 and A6 — never as a side effect of an upgrade.
+  min_version: 2026.4.3
+  project:
+    name: "wkcollis1.mmwave-presence-node"
+    version: ${fw_version}
+  on_boot:
+    priority: -100
+    then:
+      # R7: boot into a KNOWN state, not a random one. Engineering mode off,
+      # calibration hold clear, edge timestamps invalid rather than stale.
+      - lambda: |-
+          id(g_cal_hold) = false;
+          id(g_pushed) = false;
+          id(g_out_edge_ms) = 0;
+          id(g_uart_edge_ms) = 0;
+          id(g_disagree_s) = 0;
+          id(g_last_lux_ms) = millis();
+
+esp32:
+  board: seeed_xiao_esp32c3
+  framework:
+    type: esp-idf
+
+logger:
+  level: INFO
+  # USB Serial/JTAG, not UART0 — GPIO20/21 are U0RXD/U0TXD (§3.3) and the ROM
+  # boot log would collide with anything wired to D6/D7 later.
+  hardware_uart: USB_SERIAL_JTAG
+
+debug:
+  update_interval: 60s
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # R2. power_save_mode defaults to LIGHT on ESP32, parking the radio between
+  # DTIM beacons and adding tens to low hundreds of ms to the API packet that
+  # carries the presence edge. That is spent out of a 1000 ms median budget for
+  # nothing — this node is mains powered.
+  power_save_mode: none
+  #
+  # ---- SCREEK'S CO-LOCATION MITIGATIONS — NOT ADOPTED, DELIBERATELY --------
+  # Screek ship the 1U commercially: an ESP32-S2 and an LD2410C inside a 13.8 mm
+  # deep enclosure. Their published firmware says, in their words, "in order to
+  # adapt to work in a small space, we made some optimizations: including
+  # adjusting the WIFI transmit mode (we lowered it to 15dB), and downconverting
+  # the ESP32 to 80Mhz." Their config also COMMENTS OUT `power_save_mode: NONE`
+  # and runs LIGHT instead — the opposite of the line above.
+  #
+  #   wifi:  output_power: 15dB          # default is 20 dB
+  #   wifi:  power_save_mode: LIGHT
+  #   esphome: platformio_options: {board_build.f_cpu: 80000000L}   # 240 -> 80 MHz
+  #
+  # All three reduce RF and switching noise next to a 24 GHz receiver, and all
+  # three cost something here: TX power costs link margin (the A12 baseline),
+  # LIGHT costs the R2 latency budget directly, and 80 MHz costs lambda headroom.
+  #
+  # WHY THIS DESIGN CAN AFFORD TO DECLINE THEM — for now. §2 spends the budget
+  # differently: a continuous F.Cu ground plane BETWEEN the radar and the ESP,
+  # with the two on opposite faces of the carrier and 10 mm of standoff. Screek
+  # had 13.8 mm of total depth and no such luxury. An earlier revision of this
+  # board put the two 1.4 mm apart with nothing between them and was abandoned
+  # for exactly this reason.
+  #
+  # BUT IT IS A HYPOTHESIS UNTIL MEASURED, and Screek is testimony from someone
+  # shipping the product. A12 now carries the A/B that settles it (§5.7): log
+  # empty-room gate energies at 20 dB, then at 15 dB, and compare. If the floor
+  # moves, the plane is not doing the job and these three lines are the fix —
+  # in that order, since output_power is the one that costs R2 nothing.
+  reboot_timeout: 15min
+  ap:
+    ssid: "${friendly} Fallback"
+    password: !secret ap_password
+
+captive_portal:
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+  # R7 / §7: HA going down is LOSS OF CONVENIENCE, not a node fault. A node that
+  # reboots every 15 min because HA is offline turns one outage into a flapping
+  # node and destroys the telemetry that would have explained the outage.
+  reboot_timeout: 0s
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+time:
+  - platform: homeassistant
+    id: ha_time
+    on_time:
+      # ---- daily SPC window, §6.1 — engineering mode ON -------------------
+      - seconds: 0
+        minutes: ${eng_window_minute}
+        hours: ${eng_window_hour}
+        then:
+          - switch.turn_on: eng_mode
+          - logger.log: "SPC window open: engineering mode ON"
+
+# -----------------------------------------------------------------------------
+# I2C — light sensor on PH1, off-board on a 150 mm flying-lead cable (§2, §3.2)
+# -----------------------------------------------------------------------------
+# !! BUILD CONSTRAINT — READ BEFORE PLUGGING ANYTHING IN !!
+#   PH1 is COLOUR-CODED, NOT Qwiic PIN-ORDERED. The pad order was chosen for
+#   routing; the silkscreen colours are the interface.
+#       pad 1 = 3V3  RED      pad 2 = GND  BLACK
+#       pad 3 = SCL  YELLOW   pad 4 = SDA  BLUE
+#   Use ONLY a flying-lead cable with four independent female sockets —
+#   Adafruit 4397. A MOLDED 4-PIN HOUSING CABLE CONNECTS POWER BACKWARDS AND
+#   DESTROYS THE VEML7700. The board tells you the colours but not why, and this
+#   config gets read first — which is the whole reason the warning is here.
+# -----------------------------------------------------------------------------
+i2c:
+  sda: GPIO6            # D4 — PH1 pad 4, BLUE
+  scl: GPIO7            # D5 — PH1 pad 3, YELLOW
+  frequency: 100000     # 400 kHz buys nothing at a 10 s poll
+  scan: true
+  timeout: 50ms
+
+uart:
+  id: uart_radar
+  tx_pin: GPIO4         # D2 -> LD2410C pin 4 (UART_Rx)
+  rx_pin: GPIO5         # D3 <- LD2410C pin 5 (UART_Tx)
+  baud_rate: 256000     # documented factory default; 9600 is a contingency
+  parity: NONE
+  stop_bits: 1
+  # Engineering-mode frames are ~45 B at ~10 Hz. 512 B is cheap insurance
+  # against a truncated frame during a Wi-Fi stall.
+  rx_buffer_size: 512
+
+ld2410:
+  id: radar
+  uart_id: uart_radar
+  # NOTE: some ESPHome versions expose a component-level `throttle:` here.
+  # Deliberately NOT set — it is not clear across versions whether it also gates
+  # the binary_sensor path, and that path carries R2. Rate limiting is done with
+  # explicit per-sensor filters below, where the effect is visible in the file.
+  # Re-check at the §5.11 version freeze.
+
+# -----------------------------------------------------------------------------
+globals:
+  # Two-path skew, §6.2. Both presence paths come off the same radar but travel
+  # different routes into the ESP: OUT is a wire, has_target is a UART frame
+  # decoded by a component. Their disagreement is the most useful diagnostic
+  # this node produces, and the SIGNED skew between their edges is the cheapest
+  # continuous measurement of UART-path health available.
+  - id: g_out_edge_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: '0'
+  - id: g_uart_edge_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: '0'
+  # Sustained disagreement, seconds. §6.3 alerts at >5 min.
+  - id: g_disagree_s
+    type: uint32_t
+    restore_value: false
+    initial_value: '0'
+  # Calibration hold — set from HA for the duration of a labelled session so the
+  # nightly SPC window cannot switch engineering mode off mid-collection.
+  - id: g_cal_hold
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  # Lux staleness, §7: "if lux unavailable >1 h, hold the last valid value and
+  # alert". ESPHome already holds the last value by not publishing; what was
+  # missing is the alert, and a way for the lighting automation to REFUSE to act
+  # on an hour-old reading.
+  - id: g_last_lux_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: '0'
+  # One-shot guard for the R9 push. NOT restored across boots — the whole point
+  # is that it fires once per boot, every boot.
+  - id: g_pushed
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+# -----------------------------------------------------------------------------
+switch:
+  - platform: ld2410
+    engineering_mode:
+      name: "Radar engineering mode"
+      id: eng_mode
+      # Production default OFF (§6.1). The gate energies exist ONLY while this
+      # is on, so this switch IS the telemetry duty cycle.
+      restore_mode: ALWAYS_OFF
+    bluetooth:
+      name: "Radar Bluetooth"
+      id: radar_bt
+      # §2 coexistence, plus one less unauthenticated config path in a sealed
+      # box.
+      #
+      # TWO THINGS THE PROTOCOL DOC SAYS THAT CHANGE HOW THIS IS USED (V1.07
+      # §2.2.12, p.16):
+      #   1. "the Bluetooth function of the module is on by default" — so an
+      #      out-of-the-box module is advertising until this runs.
+      #   2. "After receiving this command, a reboot is required for the
+      #      function to take effect."
+      # So the power cycle in §5.0 step 0.4 is not merely a persistence CHECK,
+      # it is part of the operation. Turn it off, reboot, THEN verify. Without
+      # the reboot the radio is still up and the switch says otherwise.
+      restore_mode: ALWAYS_OFF
+
+  - platform: template
+    name: "Calibration hold"
+    id: cal_hold
+    icon: mdi:flask-outline
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+    turn_on_action:
+      - lambda: "id(g_cal_hold) = true;"
+      - switch.turn_on: eng_mode
+    turn_off_action:
+      - lambda: "id(g_cal_hold) = false;"
+      - switch.turn_off: eng_mode
+
+  - platform: template
+    name: "Radar auto-recover"
+    id: radar_autorecover
+    icon: mdi:restart-alert
+    optimistic: true
+    # Default OFF. A radar restart in an occupied room causes a real dropout of
+    # a few seconds. The idle timeout bridges it, but it is still an action
+    # taken with nobody watching, so it is opt-in and logged. Turn it on only
+    # after A10 has shown this node recovers cleanly.
+    restore_mode: ALWAYS_OFF
+
+button:
+  - platform: ld2410
+    factory_reset:
+      name: "Radar factory reset"
+    restart:
+      name: "Radar restart"
+      id: radar_restart
+    query_params:
+      name: "Radar query params"
+      id: radar_query
+
+text_sensor:
+  - platform: ld2410
+    version:
+      name: "Radar firmware"     # §5.0 step 0.3, §5.11
+      id: radar_version
+      on_value:
+        # First version string = the UART is locked. Push once, then never
+        # again this boot: the guard matters because query_params below causes
+        # the module to re-report, which would otherwise recurse.
+        - if:
+            condition:
+              lambda: "return !id(g_pushed) && x.length() > 0;"
+            then:
+              - lambda: "id(g_pushed) = true;"
+              - script.execute: push_commissioned_state
+    mac_address:
+      name: "Radar MAC"
+  - platform: debug
+    reset_reason:
+      name: "Node reset reason"
+
+# -----------------------------------------------------------------------------
+binary_sensor:
+  # ---- UART path -----------------------------------------------------------
+  - platform: ld2410
+    has_target:
+      name: "Presence"
+      id: presence_uart
+      on_press:
+        - lambda: |-
+            id(g_uart_edge_ms) = millis();
+            if (id(g_out_edge_ms) != 0) {
+              id(path_skew).publish_state(
+                (float)((int32_t)id(g_uart_edge_ms) - (int32_t)id(g_out_edge_ms)));
+            }
+    has_moving_target:
+      name: "Moving target"
+      id: moving_target
+    has_still_target:
+      name: "Still target"
+      id: still_target
+
+  # ---- hardware path -------------------------------------------------------
+  # RADAR_OUT is push-pull and sits LOW in an empty room, which is why it is on
+  # GPIO10 and not on a strapping pin (§3.3).
+  - platform: gpio
+    pin: GPIO10
+    name: "Presence (hardware OUT)"
+    id: presence_out
+    # DEPARTURE FROM §4.1: no `delayed_on`. The doc's 200 ms spends a fifth of
+    # the R2 median budget debouncing a DRIVEN CMOS output. There is no
+    # mechanical contact anywhere on this path and nothing to bounce; R1 is
+    # fault-current limiting (§3.3), not an RC. delayed_off stays — it only
+    # lengthens the trailing edge, where latency is free.
+    filters:
+      - delayed_off: 2s
+    on_press:
+      - lambda: |-
+          id(g_out_edge_ms) = millis();
+          if (id(g_uart_edge_ms) != 0) {
+            id(path_skew).publish_state(
+              (float)((int32_t)id(g_uart_edge_ms) - (int32_t)id(g_out_edge_ms)));
+          }
+    on_release:
+      - lambda: |-
+          id(g_out_edge_ms) = 0;
+          id(g_uart_edge_ms) = 0;
+
+  # ---- derived diagnostics -------------------------------------------------
+  - platform: template
+    name: "Presence path disagreement"
+    id: path_disagree
+    device_class: problem
+    entity_category: diagnostic
+    # Computed ON-NODE, not in HA, so it survives the HA outage it may be
+    # diagnosing (§6.2; §7 "ESPHome component stalls").
+
+  - platform: template
+    name: "Lux stale"
+    id: lux_stale
+    device_class: problem
+    entity_category: diagnostic
+    # The lighting automation reads this. §7: a dead VEML7700 must not be able
+    # to read as "dark" and hold a lamp on indefinitely.
+
+# -----------------------------------------------------------------------------
+sensor:
+  # ---- light ---------------------------------------------------------------
+  - platform: veml7700
+    address: 0x10        # confirmed, Adafruit guide p.24 "default I2C address 0x10"
+    update_interval: 10s
+    # !! CUT THE POWER-LED JUMPER ON THE BACK OF THE 4162 BEFORE ASSEMBLY !!
+    # The breakout carries a green power LED that is lit whenever the board is
+    # powered, on the same face as the photodiode, and this whole assembly goes
+    # into a SEALED BOX. An ambient-light sensor shut in a dark enclosure with
+    # its own light source is measuring its own LED.
+    # It matters because of WHERE the threshold sits: §5.6 sets THRESHOLD_ON at
+    # ~18 lx and the part resolves 0.0036 lx/count, so a stray offset of even a
+    # lux or two is a large fraction of the decision. Worse, it is a CONSTANT
+    # offset — it looks like a calibration, not a fault, and it would be
+    # silently baked into the commissioned threshold.
+    # Adafruit put the jumper there for exactly this case (guide p.7).
+    # DEPARTURE FROM §4.1: the ESPHome key is `ambient_light`, not `lux`.
+    # Calibrated lux is the whole reason this part was chosen over a
+    # phototransistor — the ~18 lx threshold transfers across nodes and across a
+    # sensor swap (§5.6). Verify the key against the pinned version at §5.11.
+    ambient_light:
+      name: "Ambient light"
+      id: lux
+      accuracy_decimals: 1
+      on_value:
+        - lambda: "id(g_last_lux_ms) = millis();"
+    actual_gain:
+      name: "Lux gain"
+      entity_category: diagnostic
+    actual_integration_time:
+      name: "Lux integration time"
+      entity_category: diagnostic
+    # auto_mode ranges gain and integration time so one part covers a dark room
+    # and a sunlit one without saturating. The two diagnostic sensors above
+    # exist so a suspicious lux reading can be checked against the range the
+    # part was actually in when it made it.
+    auto_mode: true
+
+    # GLASS ATTENUATION — THE SENSOR IS INSIDE A BOX, AND §5.6 DEPENDS ON IT
+    # READING ROOM LUX.
+    # The whole case for the VEML7700 over a phototransistor is that ~18 lx
+    # means the same thing on every node and survives a sensor swap (§5.6).
+    # That argument quietly assumes the number is ROOM lux. This part sits
+    # behind an enclosure wall, so what it reports is room lux times the wall's
+    # transmission — and an uncorrected reading is portable only between nodes
+    # in identical boxes, which is a much weaker claim than the one the design
+    # rests on.
+    #
+    # ESPHome applies this as a MULTIPLIER on als_lux
+    # (`veml7700.cpp: apply_glass_attenuation_`), which is the physically right
+    # form: attenuation scales, it does not offset. An additive trim — which is
+    # what a "lux offset" number entity would give — is the wrong shape and
+    # would only be correct at one light level.
+    #
+    # MEASURE IT AT §5.0 STEP 0.6, which already exists for exactly this
+    # comparison: put the assembled node and the basement node under the same
+    # light, and set
+    #     glass_attenuation_factor = lux_reference / lux_in_box
+    # 1.0 is "no correction" and is a placeholder, not a measurement. Record the
+    # measured value in the §5.8 baseline — it is part of the commissioned
+    # state, and a lid change invalidates it.
+    glass_attenuation_factor: 1.0
+
+  - platform: template
+    name: "Lux age"
+    id: lux_age
+    unit_of_measurement: "s"
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    lambda: "return (millis() - id(g_last_lux_ms)) / 1000.0f;"
+    update_interval: 60s
+
+  # ---- radar summary -------------------------------------------------------
+  - platform: ld2410
+    moving_distance:
+      name: "Moving distance"
+      filters:
+        - throttle: 1s
+    still_distance:
+      name: "Still distance"
+      filters:
+        - throttle: 1s
+    moving_energy:
+      name: "Moving energy"
+      id: move_energy
+      filters:
+        - throttle: 1s
+    still_energy:
+      name: "Still energy"
+      id: still_energy
+      filters:
+        - throttle: 1s
+    detection_distance:
+      name: "Detection distance"
+      filters:
+        - throttle: 1s
+
+    # ---- per-gate energies — 18 series, engineering mode only (§6.1) --------
+    # RATE CONTROL, and why it is `throttle` and not `delta`:
+    # `delta` would cut recorder rows far harder, but it publishes only on
+    # CHANGE, which deletes exactly the samples §5.9 needs. The long stretches
+    # sitting at a low stable value ARE the empty-room distribution whose P99.5
+    # sets E_clutter; dropping them biases every percentile upward and silently
+    # invalidates the calibration. Throttle samples uniformly in time, which is
+    # what a quantile estimate requires.
+    g0:
+      move_energy:
+        name: "G0 move"
+        filters: &gate_rate
+          # RUNTIME rate control. See "RECORDER COST" below — the gate series
+          # are by far the largest thing this node can do to the recorder, and
+          # the right rate is different during a 72 h passive collection than
+          # during a focused 10-minute seat run. A compile-time `throttle:`
+          # would make that a reflash; this makes it a dashboard number.
+          # `return {}` means "do not publish", so a dropped sample costs
+          # nothing downstream. The static is per-filter-instance, so each of
+          # the 18 series throttles independently, which is what we want.
+          - lambda: |-
+              static uint32_t last_pub = 0;
+              uint32_t t = millis();
+              float p = id(gate_period).state;
+              // NaN before the number restores; casting NaN to uint32_t is
+              // undefined, and the failure would be a node that either floods
+              // the recorder or publishes nothing at all.
+              if (!std::isfinite(p) || p < 1.0f) p = 5.0f;
+              uint32_t period = (uint32_t)(p * 1000.0f);
+              if (last_pub != 0 && (t - last_pub) < period) return {};
+              last_pub = t;
+              return x;
+      still_energy:
+        name: "G0 still"
+        filters: *gate_rate
+    g1:
+      move_energy:
+        name: "G1 move"
+        filters: *gate_rate
+      still_energy:
+        name: "G1 still"
+        filters: *gate_rate
+    g2:
+      move_energy:
+        name: "G2 move"
+        filters: *gate_rate
+      still_energy:
+        name: "G2 still"
+        filters: *gate_rate
+    g3:
+      move_energy:
+        name: "G3 move"
+        filters: *gate_rate
+      still_energy:
+        name: "G3 still"
+        filters: *gate_rate
+    g4:
+      move_energy:
+        name: "G4 move"
+        filters: *gate_rate
+      still_energy:
+        name: "G4 still"
+        filters: *gate_rate
+    g5:
+      move_energy:
+        name: "G5 move"
+        filters: *gate_rate
+      still_energy:
+        name: "G5 still"
+        filters: *gate_rate
+    g6:
+      move_energy:
+        name: "G6 move"
+        filters: *gate_rate
+      still_energy:
+        name: "G6 still"
+        filters: *gate_rate
+    g7:
+      move_energy:
+        name: "G7 move"
+        filters: *gate_rate
+      still_energy:
+        name: "G7 still"
+        filters: *gate_rate
+    g8:
+      move_energy:
+        name: "G8 move"
+        filters: *gate_rate
+      still_energy:
+        name: "G8 still"
+        filters: *gate_rate
+
+  # ---- node health ---------------------------------------------------------
+  - platform: template
+    name: "Presence path skew"
+    id: path_skew
+    unit_of_measurement: "ms"
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    # Signed: positive = the UART edge arrived AFTER the wire. Published on the
+    # SECOND of the two edges. A drifting median here is the early warning that
+    # §6.3's "UART and OUT disagree" row catches only once the failure is total.
+
+  - platform: wifi_signal
+    name: "Node RSSI"
+    id: rssi
+    update_interval: 60s
+    entity_category: diagnostic
+    # A12 baseline and the §6.3 "RSSI degrades >10 dB sustained" row. Take the
+    # commissioning set with radar idle, radar active, module BT on, BT off.
+
+  - platform: uptime
+    name: "Node uptime"
+    entity_category: diagnostic
+
+  - platform: internal_temperature
+    name: "Node temperature"
+    entity_category: diagnostic
+    # A sealed ABS box holding a 5 V radar and a Wi-Fi SoC. Worth having before
+    # it becomes the explanation for a summer drift in §6.3.
+
+# -----------------------------------------------------------------------------
+# NUMBERS — the commissioned state. R9: these live in git, not in module NVM.
+# -----------------------------------------------------------------------------
+# TIMEOUT ARITHMETIC — the one that bites.
+#   The module's `timeout` holds has_target ON after the target disappears. HA
+#   then waits its OWN idle timeout before switching off. THESE ADD. A 300 s
+#   module timeout plus a 300 s HA `for:` is a ten-minute hold, and A5 fails
+#   with nothing obviously wrong in either file.
+#   Resolution: the module timeout is deliberately SHORT — long enough to bridge
+#   the radar's own tracking dropouts locally, and to be the sane fallback if HA
+#   is down (§7) — and the ROOM-level idle timeout lives in HA, where it is
+#   visible, tunable without a reflash, and where the automation SUBTRACTS this
+#   value so the total hold is what the dashboard says it is.
+# -----------------------------------------------------------------------------
+number:
+  - platform: ld2410
+    # NO `initial_value` / `restore_value` HERE — they are not in this
+    # platform's schema. `number.number_schema()` is the plain base schema;
+    # initial_value and restore_value belong to `number: platform: template`.
+    # An earlier draft set them on all 21 entities and would not have compiled.
+    #
+    # THAT LEFT A HOLE UNDER R9, AND IT IS THE IMPORTANT PART.
+    # These entities REFLECT what the module holds in its own NVM and WRITE to
+    # it when something changes them. They do not push a value at boot. So
+    # declaring thresholds in YAML does not, on its own, put them in the radar —
+    # "the commissioned state is reproducible from version control" would have
+    # been true of the file and false of the hardware, which is the failure R9
+    # exists to prevent, wearing the costume of compliance.
+    #
+    # The push is therefore explicit: `script.push_commissioned_state` below,
+    # fired once per boot as soon as the radar proves it is talking.
+    #
+    # NOTE: timeout / max_move_distance_gate / max_still_distance_gate are
+    # cv.Inclusive in one group — specify any and you must specify all three.
+    timeout:
+      name: "Radar timeout"
+      id: n_timeout
+    max_move_distance_gate:
+      name: "Max move gate"
+      id: n_max_move
+      # §5.2 / R6: set to the first gate BEYOND the far wall. This is the
+      # through-wall mitigation; A7 measures what survives it.
+      # RANGE IS 2-8, confirmed from protocol V1.07 §2.2.3 ("configuration
+      # range 2~8"). The datasheet p.8 says "1 to 8" and is wrong; the protocol
+      # doc is both newer and the one the command actually obeys.
+      # SECOND MECHANISM, not currently used: setting a gate's sensitivity to
+      # 100 makes that gate never report a target (protocol V1.07 §5.2, p.8).
+      # That blanks a gate INDIVIDUALLY rather than truncating everything past
+      # it, which the max-gate setting cannot do. Worth knowing for a single
+      # noisy gate; do not reach for it before §5.4 has identified one.
+    max_still_distance_gate:
+      name: "Max still gate"
+      id: n_max_still
+
+    g0:
+      move_threshold:
+        name: "G0 move threshold"
+        id: n_g0_move
+      still_threshold:
+        name: "G0 still threshold"
+        id: n_g0_still
+    g1:
+      move_threshold:
+        name: "G1 move threshold"
+        id: n_g1_move
+      still_threshold:
+        name: "G1 still threshold"
+        id: n_g1_still
+    g2:
+      move_threshold:
+        name: "G2 move threshold"
+        id: n_g2_move
+      still_threshold:
+        name: "G2 still threshold"
+        id: n_g2_still
+    g3:
+      move_threshold:
+        name: "G3 move threshold"
+        id: n_g3_move
+      still_threshold:
+        name: "G3 still threshold"
+        id: n_g3_still
+    g4:
+      move_threshold:
+        name: "G4 move threshold"
+        id: n_g4_move
+      still_threshold:
+        name: "G4 still threshold"
+        id: n_g4_still
+    g5:
+      move_threshold:
+        name: "G5 move threshold"
+        id: n_g5_move
+      still_threshold:
+        name: "G5 still threshold"
+        id: n_g5_still
+    g6:
+      move_threshold:
+        name: "G6 move threshold"
+        id: n_g6_move
+      still_threshold:
+        name: "G6 still threshold"
+        id: n_g6_still
+    g7:
+      move_threshold:
+        name: "G7 move threshold"
+        id: n_g7_move
+      still_threshold:
+        name: "G7 still threshold"
+        id: n_g7_still
+    g8:
+      move_threshold:
+        name: "G8 move threshold"
+        id: n_g8_move
+      still_threshold:
+        name: "G8 still threshold"
+        id: n_g8_still
+
+  - platform: template
+    name: "Gate log period"
+    id: gate_period
+    icon: mdi:timer-cog
+    entity_category: config
+    optimistic: true
+    mode: box
+    min_value: 1
+    max_value: 60
+    step: 1
+    unit_of_measurement: "s"
+    initial_value: ${gate_log_period}
+    restore_value: true
+
+select:
+  - platform: ld2410
+    distance_resolution:
+      name: "Gate resolution"
+      # 0.75 m gates. 0.2 m would give finer localisation over a shorter total
+      # range — reconsider only if §5.2a finds two seats sharing one gate.
+
+    # ---- `baud_rate` IS DELIBERATELY NOT EXPOSED --------------------------
+    # The ld2410 select platform offers one. It is omitted here, and this
+    # comment exists so the omission stays a decision rather than an accident
+    # somebody "fixes".
+    #
+    # THE MODULE HAS FIVE PINS AND NO RESET (DS §4.2). There is no hardware
+    # recovery. If it becomes unreachable over UART **and** Bluetooth is off,
+    # it is unrecoverable — and changing the baud rate is essentially the ONLY
+    # way to make a live module unreachable. Every other "UART failure" is a
+    # wire (fix the wire), an ESP (fix the ESP), or a dead radar (BT would not
+    # have saved it either).
+    #
+    # One accidental tap on a dropdown should not be able to brick a part with
+    # no reset pin. Removing the control removes the failure.
+    #
+    # RECOVERY IF IT EVER DOES HAPPEN, no Bluetooth required: `radar_baud` is a
+    # substitution at the top of this file. The documented rates are
+    #   9600  19200  38400  57600  115200  230400  256000(default)  460800
+    # Change the substitution, reflash, watch `Radar firmware`. Eight attempts,
+    # about ten minutes, and it needs nothing you do not already have.
+
+
+# -----------------------------------------------------------------------------
+# R9 — PUSH THE COMMITTED STATE INTO THE MODULE
+# -----------------------------------------------------------------------------
+# "Commissioned state must be reproducible from version control." That requires
+# the YAML to be AUTHORITATIVE over module NVM, and the ld2410 number platform
+# does not do that on its own — its entities mirror NVM and write on change.
+# So the push is explicit and happens once per boot.
+#
+# WHEN: on the first `version` the radar reports. That is the right trigger
+# rather than a fixed delay, because it is the same signal that proves the UART
+# is locked (§5.0 step 0.3) — pushing 21 parameters into a UART that has not
+# come up yet writes nothing and reports success.
+#
+# CONSEQUENCE, AND IT IS DELIBERATE: a threshold tuned from the HA dashboard is
+# LOST at the next reboot, because the YAML wins. That is R9 working, not a bug.
+# Tune from HA to explore; commit the value to the per-device file to keep it.
+# The alternative — letting the dashboard silently outrank git — is exactly the
+# "opaque values in device NVM, not diffable, don't survive a module swap"
+# failure that §5.3a rejects auto-calibration for.
+script:
+  - id: push_commissioned_state
+    mode: single
+    then:
+      - number.set:
+          id: n_timeout
+          value: ${radar_timeout_s}
+      - number.set:
+          id: n_max_move
+          value: ${max_move_gate}
+      - number.set:
+          id: n_max_still
+          value: ${max_still_gate}
+      - number.set:
+          id: n_g0_move
+          value: ${g0_move}
+      - number.set:
+          id: n_g0_still
+          value: ${g0_still}
+      - number.set:
+          id: n_g1_move
+          value: ${g1_move}
+      - number.set:
+          id: n_g1_still
+          value: ${g1_still}
+      - number.set:
+          id: n_g2_move
+          value: ${g2_move}
+      - number.set:
+          id: n_g2_still
+          value: ${g2_still}
+      - number.set:
+          id: n_g3_move
+          value: ${g3_move}
+      - number.set:
+          id: n_g3_still
+          value: ${g3_still}
+      - number.set:
+          id: n_g4_move
+          value: ${g4_move}
+      - number.set:
+          id: n_g4_still
+          value: ${g4_still}
+      - number.set:
+          id: n_g5_move
+          value: ${g5_move}
+      - number.set:
+          id: n_g5_still
+          value: ${g5_still}
+      - number.set:
+          id: n_g6_move
+          value: ${g6_move}
+      - number.set:
+          id: n_g6_still
+          value: ${g6_still}
+      - number.set:
+          id: n_g7_move
+          value: ${g7_move}
+      - number.set:
+          id: n_g7_still
+          value: ${g7_still}
+      - number.set:
+          id: n_g8_move
+          value: ${g8_move}
+      - number.set:
+          id: n_g8_still
+          value: ${g8_still}
+      - logger.log: "R9: commissioned thresholds pushed from YAML into module NVM"
+      - button.press: radar_query          # read them back so HA shows the truth
+
+# -----------------------------------------------------------------------------
+# INTERVALS
+# -----------------------------------------------------------------------------
+interval:
+  # ---- close the daily SPC window, §6.1 -----------------------------------
+  # Done here rather than as a second on_time, because the close time is
+  # start + duration and computing that in a cron expression across an hour
+  # boundary is a bug waiting to happen. This checks a wall-clock condition
+  # instead, which is correct at midnight, across DST, and after a reboot
+  # mid-window.
+  - interval: 30s
+    then:
+      - if:
+          condition:
+            and:
+              - switch.is_on: eng_mode
+              - lambda: "return !id(g_cal_hold);"
+              - lambda: |-
+                  auto t = id(ha_time).now();
+                  if (!t.is_valid()) return false;
+                  int now_min   = t.hour * 60 + t.minute;
+                  int start_min = ${eng_window_hour} * 60 + ${eng_window_minute};
+                  int elapsed   = (now_min - start_min + 1440) % 1440;
+                  return elapsed >= 10 && elapsed < 60;   // 10 min window
+          then:
+            - switch.turn_off: eng_mode
+            - logger.log: "SPC window closed: engineering mode OFF"
+
+  # ---- two-path cross-check, §6.2 -----------------------------------------
+  - interval: 1s
+    then:
+      - lambda: |-
+          bool a = id(presence_uart).state;
+          bool b = id(presence_out).state;
+          if (a != b) {
+            id(g_disagree_s)++;
+          } else {
+            if (id(path_disagree).state) id(path_disagree).publish_state(false);
+            id(g_disagree_s) = 0;
+          }
+          // 300 s = the §6.3 trigger. Below that the two paths differ routinely
+          // and harmlessly — delayed_off is 2 s on one and the module timeout
+          // is tens of seconds on the other, so brief disagreement is EXPECTED.
+          // Alerting on it would train the alert to be ignored.
+          if (id(g_disagree_s) > 300 && !id(path_disagree).state) {
+            id(path_disagree).publish_state(true);
+            ESP_LOGW("mmwave", "presence paths disagree %u s (uart=%d out=%d)",
+                     id(g_disagree_s), a, b);
+          }
+
+  # ---- opt-in recovery after 10 min of disagreement ------------------------
+  - interval: 60s
+    then:
+      - if:
+          condition:
+            and:
+              - switch.is_on: radar_autorecover
+              - lambda: "return id(g_disagree_s) > 600;"
+          then:
+            - logger.log: "UART path stalled 10 min — restarting radar module"
+            - button.press: radar_restart
+            - lambda: "id(g_disagree_s) = 0;"   # one attempt per 10 min, not a loop
+
+  # ---- lux staleness, §7 ---------------------------------------------------
+  - interval: 60s
+    then:
+      - lambda: |-
+          bool stale = (millis() - id(g_last_lux_ms)) > 3600000UL;  // 1 h
+          if (stale != id(lux_stale).state) id(lux_stale).publish_state(stale);

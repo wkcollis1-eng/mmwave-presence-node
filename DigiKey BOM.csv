@@ -1,0 +1,8 @@
+﻿"Index","Quantity","Part Number","Manufacturer Part Number","Description","Unit of Measure","Customer Reference","Available","Backorder","Unit Price","Extended Price USD"
+"1","10","2057-PH1-05-UA-ND","PH1-05-UA","CONN HEADER VERT 5POS 2.54MM","","","10","0","0.07200","$0.72"
+"2","10","BC5137-ND","K104K10X7RF53L2","CAP CER 0.1UF 50V X7R RADIAL","","","10","0","0.15400","$1.54"
+"3","4","445-181283-ND","FG28X5R1E106MRT00","CAP CER 10UF 25V X5R RADIAL","","","4","0","0.46000","$1.84"
+"4","2","1528-2891-ND","4162","STEMMA QT VEML7700 SENSOR","","","2","0","4.95000","$9.90"
+"5","2","1528-4397-ND","4397","STEMMA QT QWIIC JST SH CABLE 150","","","2","0","0.95000","$1.90"
+"6","2","2057-PH1RA-04-UA-ND","PH1RA-04-UA","CONN HEADER R/A 4POS 2.54MM","","","2","0","0.17000","$0.34"
+

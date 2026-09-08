@@ -1,0 +1,585 @@
+# =============================================================================
+# DASHBOARD VIEW — mmWave bench rig
+# Rev 0.1 DRAFT (2026-09-05). Pairs with esphome/mmwave-bench.yaml.
+# -----------------------------------------------------------------------------
+# Laid out in the order you will actually need it:
+#
+#   1. IS THE UART UP?      — nothing below means anything until this is green
+#   2. What is it seeing?   — presence, distance, energy
+#   3. Gate energies        — the 18 series, which is why engineering mode is on
+#   4. The tuning surface   — change a threshold, watch presence react
+#   5. Bench checklist      — §5.0, so you are not reading two documents
+#
+# Drop in /config/dashboards/views/ alongside dehumidifier.yaml and sdr-meters.yaml.
+# NOT an ESPHome file — it has no `esphome:` block and the ESPHome Device
+# Builder will reject it with "'esphome' section missing". The `view-` prefix
+# exists so it cannot be confused with esphome/mmwave-bench.yaml, which it
+# used to share a filename with.
+# Entity ids assume esphome friendly_name "Bench mmWave" -> bench_mmwave_*.
+#
+# RECONCILED 2026-09-07 against the live node: all 71 predicted ids verified
+# present, 0 missing. The naming prediction held exactly, so the rule that had
+# to be broken here has now been repaired with measurement.
+#
+# ONE EXCEPTION, AND IT WILL BITE YOU. The six entities added by the 2026-09-07
+# firmware update came up as `office_bench_mmwave_*`, NOT `bench_mmwave_*`. HA
+# generates an entity_id from the device name at CREATION time and never
+# retroactively renames existing entities, so the node now carries two prefixes.
+# Mixing them below is CORRECT, not a typo. If you want them consistent,
+# normalise in the entity registry FIRST and then update this file — doing it
+# the other way round breaks every card here.
+# =============================================================================
+type: sections
+max_columns: 3
+icon: mdi:test-tube
+path: mmwave-bench
+title: mmWave Bench
+header:
+  card:
+    type: markdown
+    text_only: true
+    content: |
+      # mmWave bench rig
+      LD2410C on jumpers. No light sensor, no enclosure, no lighting logic.
+
+badges:
+  - type: entity
+    entity: binary_sensor.bench_mmwave_self_test_passed
+    name: SELF-TEST
+  - type: entity
+    entity: binary_sensor.bench_mmwave_uart_healthy
+    name: UART
+  - type: entity
+    entity: binary_sensor.bench_mmwave_presence_uart
+    name: Presence
+  - type: entity
+    entity: binary_sensor.bench_mmwave_moving_target
+    name: Moving
+  - type: entity
+    entity: binary_sensor.bench_mmwave_still_target
+    name: Still
+  - type: entity
+    entity: sensor.bench_mmwave_detection_distance
+    name: Distance
+  - type: entity
+    entity: sensor.bench_mmwave_rssi
+    name: RSSI
+
+sections:
+  # ===========================================================================
+  # 1 — IS THE UART UP
+  # ===========================================================================
+  - type: grid
+    column_span: 3
+    cards:
+      - type: markdown
+        text_only: true
+        content: >
+          ### Step 1 — is the UART up?
+
+
+          **`Radar firmware` having a value is the whole test.** If it is
+          populated, the crossover is right, the baud rate is right, and the
+          module is alive. If it is blank, nothing else on this page means
+          anything — swap module TX and RX before changing any other setting.
+          That crossover is the most common bring-up fault, and §3.2 names every
+          net for the *module's* pin precisely because "TX" alone is ambiguous
+          in a crossover.
+
+      - type: entities
+        entities:
+          - entity: binary_sensor.bench_mmwave_self_test_passed
+            name: SELF-TEST — has this rig ever actually detected anything?
+          - entity: binary_sensor.bench_mmwave_uart_healthy
+            name: UART healthy
+          - entity: binary_sensor.bench_mmwave_out_pin_state_via_uart
+            name: OUT pin — as the MODULE reports it (eng mode only)
+          - entity: sensor.bench_mmwave_radar_firmware
+            name: Radar firmware  ← the one that matters
+          - entity: sensor.bench_mmwave_radar_mac
+            name: Radar MAC
+          - type: divider
+          - entity: switch.bench_mmwave_engineering_mode
+            name: Engineering mode (gate energies need this)
+          - entity: switch.bench_mmwave_radar_bluetooth
+            name: Radar Bluetooth — turn OFF, power cycle, confirm still off
+          - type: divider
+          - entity: button.bench_mmwave_radar_query_params
+            name: Query params (read the module's REAL settings back)
+          - entity: button.bench_mmwave_radar_restart
+            name: Radar restart
+          - entity: button.bench_mmwave_node_restart
+            name: Node restart (also resets the distance envelope)
+          - entity: button.bench_mmwave_radar_factory_reset
+            name: Radar factory reset
+
+  # ===========================================================================
+  # 2 — WHAT IS IT SEEING
+  # ===========================================================================
+  - type: grid
+    column_span: 2
+    cards:
+      - type: markdown
+        text_only: true
+        content: "### Step 2 — what is it seeing?"
+
+      - type: horizontal-stack
+        cards:
+          - type: gauge
+            entity: sensor.bench_mmwave_moving_energy
+            name: Move energy
+            min: 0
+            max: 100
+            needle: true
+            severity:
+              green: 0
+              yellow: 30
+              red: 60
+          - type: gauge
+            entity: sensor.bench_mmwave_still_energy
+            name: Still energy
+            min: 0
+            max: 100
+            needle: true
+            severity:
+              green: 0
+              yellow: 30
+              red: 60
+
+      - type: gauge
+        entity: sensor.bench_mmwave_detection_distance
+        name: Detection distance
+        # FEET, corrected 2026-09-07. The node was changed to publish feet but
+        # this card kept `unit: cm` and a 675 max, so the needle read a foot
+        # value against a centimetre scale and sat near zero permanently.
+        # A gauge `unit:` is a LABEL — it does not convert anything.
+        # 22 ft is the module's own 6.75 m ceiling. The office doorway (11.3 ft)
+        # lands mid-scale, and gate 4 caps useful range at 12.3 ft.
+        unit: ft
+        min: 0
+        max: 22
+        needle: true
+        severity:
+          green: 0
+          yellow: 12.3
+          red: 18
+
+      - type: entities
+        entities:
+          - entity: sensor.bench_mmwave_module_photodiode
+            name: Module photodiode (0-255, raw — NOT lux)
+          - type: divider
+          - entity: sensor.bench_mmwave_moving_distance
+            name: Moving distance
+          - entity: sensor.bench_mmwave_still_distance
+            name: Still distance
+          - type: divider
+          - entity: sensor.bench_mmwave_closest_detection_seen
+            name: Closest seen since boot
+          - entity: sensor.bench_mmwave_furthest_detection_seen
+            name: Furthest seen since boot
+          - type: divider
+          - entity: sensor.bench_mmwave_presence_events_since_boot
+            name: Presence events since boot
+          - entity: sensor.bench_mmwave_seconds_since_last_event
+            name: Since last event
+
+      - type: history-graph
+        hours_to_show: 1
+        title: Presence — both paths
+        entities:
+          - entity: binary_sensor.bench_mmwave_presence_uart
+            name: UART
+          - entity: binary_sensor.bench_mmwave_presence_hardware_out
+            name: OUT wire
+          - entity: binary_sensor.bench_mmwave_moving_target
+            name: Moving
+          - entity: binary_sensor.bench_mmwave_still_target
+            name: Still
+
+  # ---------------------------------------------------------------------------
+  - type: grid
+    cards:
+      - type: markdown
+        text_only: true
+        content: >
+          ### The two-path cross-check
+
+
+          Both presence readings come off the *same radar* by different routes —
+          one is a wire, the other is a UART frame decoded by a component.
+          **Their disagreement is the most useful diagnostic this rig
+          produces** (§6.2).
+
+
+          The skew is signed: positive means the UART frame arrived *after* the
+          wire. R2 gives the whole system a 1000 ms median budget, so it is
+          worth knowing early how much of that is spent inside the node.
+
+
+          Brief disagreement is normal and expected — `delayed_off` is 2 s on
+          one path and the module timeout is seconds to tens of seconds on the
+          other. Only sustained disagreement (5 min) raises the flag.
+
+      - type: entities
+        entities:
+          - entity: sensor.bench_mmwave_presence_path_skew
+            name: Path skew (ms, signed)
+          - entity: binary_sensor.bench_mmwave_paths_disagree
+            name: Paths disagree > 5 min
+          - type: divider
+          - entity: sensor.bench_mmwave_uptime
+            name: Uptime
+          - entity: sensor.bench_mmwave_reset_reason
+            name: Last reset reason
+          - entity: sensor.bench_mmwave_node_temperature
+            name: Node temperature
+
+  # ===========================================================================
+  # 3 — GATE ENERGIES
+  # ===========================================================================
+  - type: grid
+    column_span: 3
+    cards:
+      - type: markdown
+        text_only: true
+        content: >
+          ### Step 3 — the 18 gate energies
+
+
+          Each gate is 0.75 m deep: **g0 = 0.00–0.75 m** through
+          **g8 = 6.00–6.75 m**. These exist *only* while engineering mode is on.
+          If both graphs are flat, check the Engineering mode toggle above
+          before suspecting the radar.
+
+
+          Walk away from the rig slowly and watch the energy hand off from gate
+          to gate. That is the range-gate map of §5.2 — and the design doc is
+          emphatic that you map by **gate energy, not reported distance**,
+          because Hi-Link state that ranging is deliberately weakened in favour
+          of detection. Per-gate energies are direct measurements; distance is
+          derived and admitted poor.
+
+      - type: history-graph
+        hours_to_show: 1
+        title: MOVE energy by gate — the false-trigger channel
+        entities:
+          - entity: sensor.bench_mmwave_g0_move
+            name: g0 0.00-0.75
+          - entity: sensor.bench_mmwave_g1_move
+            name: g1 0.75-1.50
+          - entity: sensor.bench_mmwave_g2_move
+            name: g2 1.50-2.25
+          - entity: sensor.bench_mmwave_g3_move
+            name: g3 2.25-3.00
+          - entity: sensor.bench_mmwave_g4_move
+            name: g4 3.00-3.75
+          - entity: sensor.bench_mmwave_g5_move
+            name: g5 3.75-4.50
+          - entity: sensor.bench_mmwave_g6_move
+            name: g6 4.50-5.25
+          - entity: sensor.bench_mmwave_g7_move
+            name: g7 5.25-6.00
+          - entity: sensor.bench_mmwave_g8_move
+            name: g8 6.00-6.75
+
+      - type: history-graph
+        hours_to_show: 1
+        title: STILL energy by gate — the R1 channel, the one that matters
+        entities:
+          - entity: sensor.bench_mmwave_g0_still
+            name: g0 0.00-0.75
+          - entity: sensor.bench_mmwave_g1_still
+            name: g1 0.75-1.50
+          - entity: sensor.bench_mmwave_g2_still
+            name: g2 1.50-2.25
+          - entity: sensor.bench_mmwave_g3_still
+            name: g3 2.25-3.00
+          - entity: sensor.bench_mmwave_g4_still
+            name: g4 3.00-3.75
+          - entity: sensor.bench_mmwave_g5_still
+            name: g5 3.75-4.50
+          - entity: sensor.bench_mmwave_g6_still
+            name: g6 4.50-5.25
+          - entity: sensor.bench_mmwave_g7_still
+            name: g7 5.25-6.00
+          - entity: sensor.bench_mmwave_g8_still
+            name: g8 6.00-6.75
+
+  # ===========================================================================
+  # 4 — THE TUNING SURFACE
+  # ===========================================================================
+  - type: grid
+    column_span: 3
+    cards:
+      - type: markdown
+        text_only: true
+        content: >
+          ### Step 4 — the tuning surface
+
+
+          Change a threshold, watch presence react. This is much cheaper to
+          learn here than in a dark family room at 23:00.
+
+
+          **The detector fires on `energy > threshold`, so LOWER is more
+          sensitive** — fewer missed people, more false triggers. Two things
+          worth internalising before you start moving numbers:
+
+
+          *Move and still are independent, and their failure modes differ.*
+          A ceiling fan or a supply register raises **move** energy in an empty
+          room; the fix is to raise that gate's move threshold and **leave the
+          still threshold alone** (§5.4). Raising both because a fan set it off
+          is how you end up with a node that drops a motionless reader.
+
+
+          *Nothing you set here is the commissioned value.* Real thresholds come
+          from `scripts/mmwave_calibrate.py` running over labelled data, and
+          they live in the per-device YAML in git, not in module NVM — that is
+          what R9 buys. These sliders are for building intuition.
+
+      - type: entities
+        title: Module-level
+        entities:
+          - entity: number.bench_mmwave_timeout
+            name: Timeout (short on the bench — 5-10 s)
+          - entity: number.bench_mmwave_max_move_gate
+            name: Max move gate
+          - entity: number.bench_mmwave_max_still_gate
+            name: Max still gate
+          - entity: select.bench_mmwave_gate_resolution
+            name: Gate resolution (0.75 m default)
+
+      - type: entities
+        title: MOVE thresholds — raise these for fans and registers
+        entities:
+          - entity: number.bench_mmwave_g0_move_threshold
+            name: g0
+          - entity: number.bench_mmwave_g1_move_threshold
+            name: g1
+          - entity: number.bench_mmwave_g2_move_threshold
+            name: g2
+          - entity: number.bench_mmwave_g3_move_threshold
+            name: g3
+          - entity: number.bench_mmwave_g4_move_threshold
+            name: g4
+          - entity: number.bench_mmwave_g5_move_threshold
+            name: g5
+          - entity: number.bench_mmwave_g6_move_threshold
+            name: g6
+          - entity: number.bench_mmwave_g7_move_threshold
+            name: g7
+          - entity: number.bench_mmwave_g8_move_threshold
+            name: g8
+
+      - type: entities
+        title: STILL thresholds — these hold a motionless person
+        entities:
+          - entity: number.bench_mmwave_g0_still_threshold
+            name: g0 — INERT, module ignores it (PR Table 7)
+          - entity: number.bench_mmwave_g1_still_threshold
+            name: g1 — INERT, module ignores it (PR Table 7)
+          - entity: number.bench_mmwave_g2_still_threshold
+            name: g2
+          - entity: number.bench_mmwave_g3_still_threshold
+            name: g3
+          - entity: number.bench_mmwave_g4_still_threshold
+            name: g4
+          - entity: number.bench_mmwave_g5_still_threshold
+            name: g5
+          - entity: number.bench_mmwave_g6_still_threshold
+            name: g6
+          - entity: number.bench_mmwave_g7_still_threshold
+            name: g7
+          - entity: number.bench_mmwave_g8_still_threshold
+            name: g8
+
+  # ===========================================================================
+  # 5 — BENCH CHECKLIST
+  # ===========================================================================
+  - type: grid
+    column_span: 2
+    cards:
+      - type: heading
+        heading: §4.2 control logic
+        heading_style: title
+        icon: mdi:lightbulb-auto
+      - type: markdown
+        text_only: true
+        content: >
+          The production control rule, run ON-NODE so the bench can exercise it
+          with no lamp, no HA automation and no VEML7700. **Nothing is
+          switched.** `Lamp should be ON` is what a lamp *would* follow;
+          `switch.office_lamp` is deliberately NOT wired to it, because §7's
+          "the control decision lives in HA" question is still open and
+          connecting a relay would answer it by accident.
+
+
+          The light is sampled ONCE at the empty→occupied edge and never
+          re-evaluated while occupied. That latch is the whole design: a node
+          that re-read ambient light while its own lamp was on would push itself
+          over threshold, switch off, go dark, and switch back on. Forever.
+      - type: entities
+        show_header_toggle: false
+        entities:
+          - entity: binary_sensor.office_bench_mmwave_lamp_should_be_on
+            name: Lamp should be ON  (the node's INTENT)
+          - entity: switch.office_lamp
+            name: Lamp ACTUAL  (what the lamp really did)
+          - entity: sensor.office_bench_mmwave_idle_countdown
+            name: Idle countdown
+          - entity: sensor.bench_mmwave_module_photodiode
+            name: Light — raw 0–255
+          - type: divider
+          - entity: number.office_bench_mmwave_light_threshold_raw
+            name: Light threshold
+          - entity: number.office_bench_mmwave_idle_timeout
+            name: Idle timeout
+          - entity: switch.office_bench_mmwave_lamp_control_enabled
+            name: Lamp control enabled
+          # Added 2026-09-07 AFTER the flash, with the id read off the live
+          # node - the predicted form was removed once when the audit caught it
+          # (entity-ref-unresolved). Leaving it off the dashboard had a cost:
+          # engineering mode could not be turned off by hand at all, because
+          # the keeper put it back within 5 s and its only control was invisible.
+          - entity: switch.office_bench_mmwave_keep_engineering_mode_on
+            name: Keep engineering mode on  (turn OFF to test the SPC window)
+          - entity: switch.bench_mmwave_engineering_mode
+            name: Engineering mode
+          - entity: switch.office_bench_mmwave_calibration_hold
+            name: Calibration hold
+      - type: markdown
+        text_only: true
+        content: >
+          **The threshold is a RAW PHOTODIODE COUNT, not lux** (protocol V1.07
+          §2.2.18). It is specific to this module in this orientation and
+          transfers to nothing — it proves the LOGIC, not the VALUE. Production
+          uses ~18 CALIBRATED LUX from the VEML7700 (§5.6), which is the number
+          that survives a sensor swap. Do not carry this one forward.
+
+
+          Measured 2026-09-07: office ambient **17–28**, a hand over the module
+          **2**. Threshold 10 sits between them. The comparison is a strict
+          `<`, so at exactly 10 it does NOT fire — deliberate, because a
+          threshold you can sit exactly on is a threshold that chatters.
+
+
+          **Boot race, fixed 2026-09-07.** The photodiode is
+          ENGINEERING-MODE ONLY, and engineering mode is commanded at boot+3s.
+          The first build consumed the empty→occupied edge before any reading
+          existed, so the decision was DISCARDED and could not be revisited
+          until the room had been empty for a full idle timeout. The node now
+          DEFERS instead: no reading means stay EMPTY and retry. Production has
+          the same race with the VEML7700 on its 10 s poll — and there the idle
+          timeout is 90 s (office) or 300 s (family room).
+
+  - type: grid
+    column_span: 1
+    cards:
+      - type: heading
+        heading: R9 — commissioned-state push
+        heading_style: title
+        icon: mdi:upload-lock
+      - type: entities
+        show_header_toggle: false
+        entities:
+          - entity: button.office_bench_mmwave_scramble_thresholds_test
+            name: "1. Scramble thresholds (test)"
+          - entity: button.office_bench_mmwave_push_commissioned_state
+            name: "2. Push commissioned state"
+          - entity: switch.office_bench_mmwave_push_on_boot_production_behaviour
+            name: Push on boot (production)
+          - type: divider
+          - entity: number.bench_mmwave_g4_move_threshold
+            name: g4 move — test target (YAML 20)
+          - entity: number.bench_mmwave_timeout
+            name: Radar timeout (YAML 5)
+          - type: divider
+          - entity: button.bench_mmwave_radar_query_params
+            name: Query params — read back
+          - entity: button.bench_mmwave_radar_restart
+            name: Radar restart — NVM test
+      - type: markdown
+        text_only: true
+        content: >
+          The ld2410 `number` entities REFLECT the module's NVM and WRITE on
+          change — they do NOT push at boot. Thresholds sitting in YAML are
+          therefore not in the radar until something pushes them, so
+          "the commissioned state is reproducible from version control" can be
+          true of the file and false of the hardware. That is the failure R9
+          exists to prevent, wearing the costume of compliance.
+
+
+          **The test:** set `g4 move` to 33 by hand → press **Push commissioned
+          state** → it should snap back to 20 → press **Query params**, because
+          the read-back is the proof and the log line is not → press **Radar
+          restart**. If it still reads 20 after the module reboots, it reached
+          NVM.
+
+
+          **Still unproven:** the script fires 21 `number.set` calls
+          back-to-back with no delay, each entering config mode, writing and
+          exiting. If some are dropped you will see a subset revert and the rest
+          hold their old values.
+
+
+          Production fires this same script from the `version` text sensor,
+          measured at **403 s** — so production runs on whatever its NVM already
+          held for the first ~6.7 minutes of every boot.
+
+  - type: grid
+    column_span: 3
+    cards:
+      - type: markdown
+        text_only: true
+        content: >
+          ### Step 5 — the §5.0 checklist, so you are not reading two documents
+
+
+          | # | do | pass |
+          |---|---|---|
+          | 0.0 | Inspect the module **before** first power-on — silkscreen reads plain `LD2410C`? | anything else, stop and ask |
+          | 0.1 | Meter the XIAO 5V pad, radar unplugged | 4.75–5.25 V |
+          | 0.2 | Flash, watch for UART lock at 256000 | `UART healthy` green within ~15 s |
+          | 0.3 | Record radar firmware version | §5.11 — arrives late, no longer gates anything |
+          | 0.4 | Bluetooth **off**, reboot, confirm the **iPhone app can no longer find the module** | do NOT read the switch — see below |
+          | 0.5 | Engineering mode on, 18 gate series appear | both graphs live |
+          | 0.7 | Wave a hand at 0.5 m | `Moving target` toggles |
+          | 0.8 | OUT agrees with UART | skew is small and stable |
+          | 0.9 | **Calipers on the radar PCB thickness** | 1.0 vs 1.6 mm decides 10 vs 9 mm standoffs |
+
+
+          **Step 0.9 is the one with a deadline.** The standoffs are still
+          unordered (§9 item 2) and they set the antenna-to-window geometry —
+          the single dimension the whole mechanical design turns on. Measure it
+          while the board is in your hand, not after the enclosure is closed.
+
+
+          Steps 0.6 and 0.10–0.12 need the VEML7700, the lid and the enclosure.
+          Not this session.
+
+
+          **STEP 0.4 CANNOT BE VERIFIED FROM THE SWITCH (measured 2026-09-07).**
+          `switch.bench_mmwave_radar_bluetooth` read `off` while the module was
+          demonstrably advertising and connected to the iPhone app, and after a
+          reflash the same untouched radio read `on`. Two different answers
+          about one unchanged radio: it is not a readback. Every "confirm" in
+          §5.0's off→reboot→confirm→on→reboot→confirm→off round trip reads that
+          switch, so as written the whole verification passes regardless of what
+          the module did. **The app is the instrument** — the pass criterion is
+          that the module can no longer be discovered.
+
+
+          That the app is usable for this at all was settled the same day: the
+          module streams UART and BLE CONCURRENTLY without interference
+          (10 polls over 30 s with the app connected, continuous updates, zero
+          stale reads), which closes §5.0's "unknown, worth observing".
+
+
+          **Step 0.3 is no longer a gate.** The version string was measured at
+          403 s to populate — the MAC and `gate_resolution` come from the same
+          deferred config read. `UART healthy` now keys on engineering-mode
+          gate frames instead, which prove both directions of the UART in
+          seconds. A blank firmware field in the first few minutes is NOT
+          evidence of a wiring fault.

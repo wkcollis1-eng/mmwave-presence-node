@@ -1,0 +1,823 @@
+# =============================================================================
+# mmWave BENCH BRING-UP NODE  —  XIAO ESP32-C3 + HLK-LD2410C on jumpers
+# Rev 0.1 DRAFT (2026-09-05)
+# -----------------------------------------------------------------------------
+# SELF-CONTAINED ON PURPOSE. No !include, no packages, no VEML7700, no I2C.
+# Flash this one file and the radar comes up. It shares nothing with
+# mmwave-node-common.yaml, so nothing you do here can break the production
+# config, and the production config cannot break your bench rig.
+#
+# It is also deliberately NOT the production firmware with bits removed:
+#   * engineering mode is ON at boot — the 18 gate energies are the whole point
+#     of a bench session, and in production they are off by default (§6.1)
+#   * logging is DEBUG, not INFO — you are here to see what the UART is doing
+#   * no light sensor, no lighting logic, no lux gate, no HA automations
+#   * node name is `mmwave-bench`, so every entity is bench_* and CANNOT
+#     collide with the office or family room nodes
+#
+# DO NOT deploy packages/mmwave_presence.yaml against this node. That package
+# expects a light sensor and a room; this node has neither.
+#
+# =============================================================================
+# WIRING  —  READ THIS TWICE BEFORE APPLYING POWER
+# =============================================================================
+#
+# PIN NUMBERING — CORRECTED 2026-09-05 AGAINST THE DATASHEET.
+# Datasheet V1.00 §4.2 Table 1 numbers the pins in the SAME order as the
+# silkscreen:
+#
+#     pin 1  UART_Tx     pin 2  UART_Rx     pin 3  OUT
+#     pin 4  GND         pin 5  VCC  (5 V)
+#
+# An earlier draft of this file said the numbering ran OPPOSITE to the
+# silkscreen. It does not. That claim came from the design doc's §3.2 table,
+# which numbers these pins 1=VCC ... 5=TX — the reverse of the manufacturer's
+# numbering. The design document needs correcting; see LD2410C-DOC-REVIEW.md.
+# Nothing on the fabricated PCB is affected: the board's pad ORDER is right,
+# only the numbering convention in the table is inverted.
+#
+# The practical rule is unchanged, and is the one that matters:
+#
+#   >>> IDENTIFY EVERY PIN BY ITS SILKSCREEN LABEL, NEVER BY POSITION. <<<
+#
+# VCC and TX are at opposite ends of a 5-pin header. Count from the wrong end
+# with a 5 V jumper in hand and it lands on TX.
+#
+# -----------------------------------------------------------------------------
+# | LD2410C pad | XIAO pad | GPIO   | direction        | jumper              |
+# |-------------|----------|--------|------------------|---------------------|
+# | VCC         | 5V       | —      | 5 V IN           | RED, if you have it |
+# | GND         | GND      | —      | common ground    | BLACK               |
+# | OUT         | D10      | GPIO10 | module -> ESP    | any                 |
+# | RX          | D2       | GPIO4  | ESP -> module    | any                 |
+# | TX          | D3       | GPIO5  | module -> ESP    | any                 |
+# -----------------------------------------------------------------------------
+#
+# FIVE THINGS THAT WILL COST YOU AN EVENING IF YOU GET THEM WRONG:
+#
+# 1. VCC IS 5 V, NOT 3V3. Datasheet §7: "Operating Voltage DC 5V, power supply
+#    capacity >200mA", average operating current 79 mA. The pin table (§4.2)
+#    says "5~12V (advise 5V)". IO level is 3.3 V. On the XIAO that is the pad
+#    marked 5V (VBUS), which is only live when USB is plugged in — and USB
+#    gives 500 mA, comfortably over the 200 mA the module asks for.
+#    CAVEAT, §9 item 1: Amazon reviews describe a "v1.1" that is 3.3 V-only, and
+#    there is no authorised distributor for this part. Nobody has confirmed it
+#    with a datasheet. Before you power it: look at the silkscreen. If it says
+#    anything other than a plain `LD2410C`, stop and ask.
+#
+# 2. THE UART IS CROSSED, AND THE NET NAMES ARE THE MODULE'S. Module TX goes to
+#    the ESP's rx_pin. Module RX comes from the ESP's tx_pin. §3.2 names every
+#    net for the MODULE's pin precisely because "TX" alone is ambiguous in a
+#    crossover — it caused two errors during the PCB design. If the version text
+#    sensor never populates, swap these two first; it costs nothing and it is
+#    the most common bring-up fault.
+#
+# 3. OUT MUST NOT GO TO D9 / GPIO9. OUT is push-pull and sits LOW in an empty
+#    room. GPIO9 is a strapping pin, and low at reset enters the serial
+#    bootloader. Wired there, the node would fail to boot in an empty room and
+#    work perfectly whenever somebody stands in front of it — a bug that hides
+#    from the person testing it (§3.3). D0/GPIO2 and D8/GPIO8 are also
+#    strapping pins. D10 is correct and safe.
+#
+# 4. NO R1 AND NO CAPS ON THE BENCH — jumpers only. Neither can damage
+#    anything as this file is written. What each one costs:
+#
+#    R1 (1 kΩ on OUT) — NOT NEEDED HERE. Its only job is fault-current limiting
+#    under contention (§3.3), and contention needs GPIO10 driven as an OUTPUT
+#    while the module drives OUT. Below, GPIO10 is `mode: input: true`, no pull,
+#    no `output:` anywhere. ESP32-C3 GPIO10 is a plain GPIO — high-Z at reset,
+#    untouched by the ROM bootloader. Two rules keep that true:
+#      * DO NOT add an `output:`, a `switch: platform: gpio`, or a `light:` on
+#        GPIO10. That one change is what makes the missing resistor matter.
+#      * DO NOT power the module from a separate bench supply. Sharing the
+#        XIAO's 5V pad is what makes back-feed impossible. An unpowered ESP with
+#        the module driving 3.3 V into GPIO10 forward-biases the ESP's ESD diode
+#        into a dead rail, and R1 is exactly what would bound that current.
+#
+#    C1/C2/C3 (decoupling) — THE ONE THAT ACTUALLY MATTERS, and not for
+#    reliability. The module has its own onboard regulation and will very likely
+#    just run. But jumper leads add roughly 100-200 nH to the supply of an FMCW
+#    radar whose PA switches hard, and DS §7 asks for >200 mA capacity against a
+#    79 mA average — that gap IS the transient headroom.
+#
+#      >>> DO NOT COLLECT §5.3 CALIBRATION DATA ON THE JUMPER RIG. <<<
+#
+#    Supply droop raises and roughens the gate-energy floor in an empty room,
+#    and that floor is E_clutter. A contaminated E_clutter raises every move
+#    threshold, and it would be carried into the PCB build looking like a
+#    property of the room. Bring-up, range-gate intuition and the §5.0 checklist
+#    are all fine here; threshold derivation is not.
+#
+#    Free mitigations, in order of effect: shortest jumpers in the bundle for
+#    VCC and GND; double them up if you have spares (halves L and R); a decent
+#    USB cable, not a thin charge-only one (C3 Wi-Fi TX bursts pull 300 mA+ and
+#    the cable resistance is in series with everything); pin-to-pin rather than
+#    through breadboard rails. Any 10 µF or 0.1 µF from the parts bin, placed
+#    VCC-to-GND AT THE MODULE END, beats all of the above.
+#
+#    MEASURE IT RATHER THAN WONDER. §5.0 step 0.1 meters the 5V pad with the
+#    radar unplugged; also meter it with the radar connected and Wi-Fi up, which
+#    is the loaded case. Below 4.75 V is your answer.
+#    SYMPTOMS, all already on the dashboard: `Reset reason` = BROWNOUT is
+#    definitive; `Uptime` resetting, `UART healthy` flickering, or `Path skew`
+#    jumping around all point the same way. Suspect the supply BEFORE the
+#    module, and long before the thresholds.
+#
+# 5. COMMON GROUND IS NOT OPTIONAL. UART with no shared return does not fail
+#    cleanly; it fails intermittently, which reads as a flaky module.
+#
+# =============================================================================
+# BENCH SEQUENCE — this is design doc §5.0, in the order that matters
+# =============================================================================
+#   0.0  Inspect the module BEFORE first power-on. Silkscreen reads plain
+#        `LD2410C`? 2.54 mm pitch? TX/RX/OUT/GND/VCC order as above? Measure
+#        VCC-to-GND resistance out of circuit — a dead short means stop.
+#   0.1  Power via USB only, radar UNPLUGGED. Meter the XIAO's 5V pad: 4.75–5.25 V.
+#        Only then wire the radar.
+#   0.2  Flash this file over USB. Watch the log for the UART lock at 256000.
+#   0.3  Read `Radar firmware` — if it populates, the UART is good. Record it
+#        (§5.11 version freeze).
+#   0.4  Turn `Radar Bluetooth` OFF, then press `Radar restart`, THEN confirm
+#        it is still off. The reboot is REQUIRED for the command to take effect
+#        (protocol V1.07 §2.2.12), not just a way to test persistence. BT is ON
+#        from the factory, and its config password is the default "HiLink".
+#   0.5  `Engineering mode` is already on. Confirm 18 gate series appear.
+#   0.7  Wave a hand at 0.5 m — `Moving target` toggles.
+#   0.8  Confirm `Presence (hardware OUT)` agrees with `Presence (UART)`.
+#        Watch `Presence path skew` — that is the two paths cross-checking
+#        each other (§6.2), and it is the most useful number this rig produces.
+#   0.9  CALIPERS. Measure the radar PCB thickness — 1.0 vs 1.6 mm decides
+#        10 mm vs 9 mm standoffs (§3.4), and the standoffs are still unordered
+#        (§9 item 2). Do this now, while the board is in your hand.
+#
+# Steps 0.6, 0.10–0.12 need the light sensor, the lid and the enclosure. Not
+# this session.
+#
+# =============================================================================
+# FIRST FLASH IS OVER USB. Plug the XIAO in, then:
+#     esphome run mmwave-bench.yaml
+# OTA works after that, but do not rely on it for a rig you are re-wiring.
+# =============================================================================
+
+substitutions:
+  node_name: mmwave-bench
+  friendly: Bench mmWave
+
+  # ---- BOARD ---------------------------------------------------------------
+  # Defaulted to the XIAO ESP32-C3, because that is what the BOM ordered (two,
+  # pre-soldered) and what the carrier PCB is designed around. If the board that
+  # turns up tomorrow is a generic C3 devkit instead, change these two lines:
+  #     esp32.board            -> esp32-c3-devkitm-1
+  #     logger.hardware_uart   -> see the note at `logger:` below
+  # The GPIO numbers below are raw GPIOs and do not change with the board; only
+  # the silkscreen pad labels (D2/D3/D10) do. Check them against your board.
+  board_type: seeed_xiao_esp32c3
+
+  # ---- PINS (raw GPIO — see the wiring table above) ------------------------
+  pin_radar_tx: GPIO4     # XIAO D2  -> module RX
+  pin_radar_rx: GPIO5     # XIAO D3  <- module TX
+  pin_radar_out: GPIO10   # XIAO D10 <- module OUT
+
+  # ---- UART ----------------------------------------------------------------
+  # 256000 is the documented factory default and the only rate worth trying
+  # first. 9600 is a CONTINGENCY, not an equal alternative (§5.0 step 0.2): if
+  # the version sensor stays empty after you have checked the crossover, try
+  # 9600 here before concluding the module is dead.
+  radar_baud: "256000"
+
+esphome:
+  name: ${node_name}
+  friendly_name: ${friendly}
+  # MECHANISED VERSION FLOOR — §5.11's freeze, asserted instead of documented.
+  # Borrowed from tobsch/ld2410. §5.11 says "pin the ESPHome version explicitly
+  # rather than tracking latest" and then relies on somebody remembering. This
+  # makes the build FAIL on anything older, which is the difference between a
+  # policy and a gate.
+  #
+  # 2026.4.3 is Bill's installed version and the floor these configs were
+  # validated against; they also pass on 2026.8.2. Raise it deliberately after
+  # re-running A1, A2 and A6 — never as a side effect of an upgrade.
+  min_version: 2026.4.3
+  project:
+    name: "wkcollis1.mmwave-bench"
+    version: "0.1"
+  on_boot:
+    priority: -100
+    then:
+      - lambda: |-
+          id(g_events) = 0;
+          id(g_last_event_ms) = 0;
+          id(g_out_edge_ms) = 0;
+          id(g_uart_edge_ms) = 0;
+          id(g_dmin) = 9999;
+          id(g_dmax) = 0;
+          id(g_selftest) = false;
+      # Engineering mode ON for bench work. This is the opposite of the
+      # production default and it is deliberate — without it there are no gate
+      # energies, and the gate energies are what you came to look at.
+      - delay: 3s          # let the UART settle before the first command
+      - switch.turn_on: eng_mode
+      - logger.log: "BENCH: engineering mode requested"
+
+esp32:
+  board: seeed_xiao_esp32c3
+  framework:
+    type: esp-idf
+
+logger:
+  # DEBUG, not INFO. You want to see the UART frames and any component
+  # complaints. Turn it down to INFO once the rig is behaving, because DEBUG
+  # logging of a 10 Hz radar over Wi-Fi is not free.
+  level: DEBUG
+  # The XIAO ESP32-C3 has NATIVE USB — no bridge chip — so the log comes out of
+  # the USB Serial/JTAG peripheral. A generic devkit with a CH340 or CP2102
+  # bridge uses UART0 instead: delete this line if your board has a bridge chip
+  # and you get no serial output.
+  hardware_uart: USB_SERIAL_JTAG
+  # NO PER-TAG OVERRIDE FOR ld2410 — it inherits DEBUG above, deliberately.
+  #
+  # An earlier draft set `logs: {ld2410: INFO}` to keep the log readable. That
+  # was a mistake with a specific mechanism: ESPHome's levels run
+  # NONE=0 ERROR=1 WARN=2 INFO=3 **CONFIG=4** DEBUG=5, so CONFIG is MORE
+  # verbose than INFO. Capping the tag at INFO suppressed everything at CONFIG
+  # and above — including the component's own config dump.
+  #
+  # The first flash proved it: every component printed a full config block
+  # except the radar. No entity list, no `Radar firmware`, no gate thresholds.
+  # The one component being brought up was the only one muted.
+  #
+  # `CONFIG` cannot be set here either — it exists as a C++ constant but the
+  # YAML schema rejects it (valid: NONE ERROR WARN INFO DEBUG VERBOSE
+  # VERY_VERBOSE). So the only way to keep the dump is DEBUG, which is what the
+  # global level already gives.
+  #
+  # If the frame chatter becomes unreadable once the radar is streaming, add
+  # `logs: {ld2410: INFO}` back — but know it costs the config dump, so turn it
+  # off again before diagnosing anything.
+
+# Required by the `text_sensor: platform: debug` reset-reason sensor below.
+# Caught by `esphome config` — the bench file had the sensor without the
+# component, which is a hard config failure, not a warning.
+debug:
+  update_interval: 60s
+
+# CREDENTIALS MOVED TO !secret, 2026-09-07, before this project went into git.
+# This draft still carried the SSID, the Wi-Fi PSK, the API encryption key and
+# the OTA password in plaintext, while the deployed copy in /config/esphome/
+# had already been converted. A Wi-Fi PSK committed once is effectively
+# permanent: it survives in history, in every clone, and in every fork, and no
+# amount of later editing removes it. Private repositories are not a boundary
+# for this - visibility flips, tokens leak, and forks outlive intentions.
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: none
+  # 15 min is fine on a bench rig sitting next to the AP. If you end up working
+  # somewhere with no Wi-Fi, comment out this whole block and the api: block —
+  # the node still runs, and the USB log still shows everything.
+  reboot_timeout: 15min
+  ap:
+    ssid: "${friendly} Fallback"
+    password: !secret ap_password
+
+captive_portal:
+
+api:
+  encryption:
+    key: !secret api_key_mmwave_bench
+  # Never reboot because HA went away. On a bench rig you WILL disconnect HA,
+  # and a node that reboots itself every 15 minutes while you are measuring is
+  # worse than useless.
+  reboot_timeout: 0s
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+uart:
+  id: uart_radar
+  tx_pin: ${pin_radar_tx}
+  rx_pin: ${pin_radar_rx}
+  baud_rate: ${radar_baud}
+  parity: NONE
+  stop_bits: 1
+  rx_buffer_size: 512
+
+ld2410:
+  id: radar
+  uart_id: uart_radar
+
+globals:
+  - id: g_out_edge_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: '0'
+  - id: g_uart_edge_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: '0'
+  # Bench toys that turn out to be genuinely useful: how many presence events
+  # since boot, how long since the last one, and the distance envelope you have
+  # actually managed to produce. The envelope is the quickest read on whether
+  # the module is seeing the room or seeing the bench in front of it.
+  - id: g_events
+    type: uint32_t
+    restore_value: false
+    initial_value: '0'
+  - id: g_last_event_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: '0'
+  - id: g_dmin
+    type: float
+    restore_value: false
+    initial_value: '9999'
+  - id: g_dmax
+    type: float
+    restore_value: false
+    initial_value: '0'
+  # Self-test latch — see the SELF-TEST binary sensor below.
+  - id: g_selftest
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
+# -----------------------------------------------------------------------------
+switch:
+  - platform: ld2410
+    engineering_mode:
+      name: "Engineering mode"
+      id: eng_mode
+      restore_mode: ALWAYS_OFF      # on_boot turns it on after the UART settles
+    bluetooth:
+      name: "Radar Bluetooth"
+      id: radar_bt
+      restore_mode: ALWAYS_OFF
+      # BLUETOOTH IS ON BY DEFAULT and the OFF COMMAND NEEDS A REBOOT TO TAKE
+      # EFFECT — protocol V1.07 §2.2.12: "the Bluetooth function of the module
+      # is on by default... After receiving this command, a reboot is required
+      # for the function to take effect."
+      # So the power cycle in §5.0 step 0.4 is part of the OPERATION, not just
+      # a persistence check. Turn it off, press `Radar restart`, THEN verify.
+      # Skip the reboot and the radio is still up while this switch reads off.
+      # Default password for the BLE config channel is "HiLink" (§6.3) — which
+      # is the whole argument for turning it off in a sealed box (§2).
+
+button:
+  - platform: ld2410
+    restart:
+      name: "Radar restart"
+    query_params:
+      name: "Radar query params"
+      # Press this after changing anything. It reads the module's ACTUAL
+      # parameters back over UART, which is the only way to know a write landed.
+    factory_reset:
+      name: "Radar factory reset"
+      # Returns the module to Hi-Link defaults. Useful on a bench when you have
+      # tuned yourself into a corner. It does NOT touch anything in this file.
+  - platform: restart
+    name: "Node restart"
+
+text_sensor:
+  - platform: ld2410
+    version:
+      name: "Radar firmware"
+      id: radar_version
+      # THE SINGLE MOST IMPORTANT ENTITY ON THIS RIG. If it has a value, the
+      # UART is locked, the crossover is right and the baud rate is right. If it
+      # is empty, nothing else on this page means anything — go back to wiring
+      # note 2 before touching any other setting.
+    mac_address:
+      name: "Radar MAC"
+  - platform: debug
+    reset_reason:
+      name: "Reset reason"
+
+# -----------------------------------------------------------------------------
+binary_sensor:
+  - platform: ld2410
+    has_target:
+      name: "Presence (UART)"
+      id: presence_uart
+      on_press:
+        - lambda: |-
+            id(g_uart_edge_ms) = millis();
+            id(g_events)++;
+            id(g_last_event_ms) = millis();
+            if (id(g_out_edge_ms) != 0) {
+              id(path_skew).publish_state(
+                (float)((int32_t)id(g_uart_edge_ms) - (int32_t)id(g_out_edge_ms)));
+            }
+    has_moving_target:
+      name: "Moving target"
+      id: moving_target
+    has_still_target:
+      name: "Still target"
+      id: still_target
+    # A THIRD PRESENCE PATH, AND IT COSTS NOTHING.
+    # The module reports its OWN OUT pin state over the UART (engineering mode
+    # only; "unknown" otherwise). That makes this a direct check on the JUMPER:
+    # if this says the OUT pin is high while `Presence (hardware OUT)` reads
+    # low, the fault is the wire or the GPIO, not the radar. On a bench rig
+    # being re-wired repeatedly, that is exactly the question you keep asking.
+    out_pin_presence_status:
+      name: "OUT pin state via UART"
+      id: out_via_uart
+
+  # DEFAULT FILTER, and why it is left alone on the three ld2410 sensors above:
+  # ESPHome applies `settle: 1000ms` to every ld2410 binary sensor
+  # (components/ld2410/binary_sensor.py). `settle` PUBLISHES THE CHANGE
+  # IMMEDIATELY and then suppresses further changes for 1 s — it is not
+  # `delayed_on`, and it does NOT cost the leading edge. R2's 1000 ms median
+  # budget is therefore untouched by it. Worth stating because a 1000 ms filter
+  # sitting on the presence path looks exactly like it would blow that budget,
+  # and the obvious "fix" of overriding it would only reintroduce flooding.
+  - platform: gpio
+    pin:
+      number: ${pin_radar_out}
+      mode:
+        input: true
+        # NO pull-up and NO pull-down. OUT is push-pull — it drives both rails
+        # itself — and adding a pull would fight it. If this reads stuck, the
+        # jumper is off, not the pin config.
+    name: "Presence (hardware OUT)"
+    id: presence_out
+    # No delayed_on. On the bench you want the raw edge; this is the path the
+    # skew measurement is timed against.
+    filters:
+      - delayed_off: 2s
+    on_press:
+      - lambda: |-
+          id(g_out_edge_ms) = millis();
+          if (id(g_uart_edge_ms) != 0) {
+            id(path_skew).publish_state(
+              (float)((int32_t)id(g_uart_edge_ms) - (int32_t)id(g_out_edge_ms)));
+          }
+    on_release:
+      - lambda: |-
+          id(g_out_edge_ms) = 0;
+          id(g_uart_edge_ms) = 0;
+
+  # THE ONE ENTITY TO LOOK AT WHEN YOU FINISH WIRING.
+  # Borrowed from Apollo Automation's MSR-2 factory test, which gates each
+  # sensor not on being PRESENT but on producing a PLAUSIBLE VALUE — for the
+  # radar, `has_target == true && detection_distance > 10`.
+  #
+  # That is a materially better criterion than `UART healthy` below. The UART
+  # being up proves the crossover and the baud rate; it does NOT prove the radar
+  # can see. A module with a damaged antenna, a blocked aperture, or thresholds
+  # set to 100 answers `query_params` perfectly and detects nothing. This latches
+  # true the first time the rig produces a real detection, and then stays true —
+  # so it answers "has this rig EVER worked", which on a bench being re-wired is
+  # the question you actually keep asking.
+  #
+  # Latching is deliberate: it is a commissioning gate, not a presence sensor.
+  # Press `Node restart` to re-arm it after changing the wiring.
+  - platform: template
+    name: "Self-test passed"
+    id: selftest
+    device_class: connectivity
+    icon: mdi:clipboard-check
+
+  - platform: template
+    name: "UART healthy"
+    id: uart_ok
+    device_class: connectivity
+    # True once the module has answered at all. This is the entity to look at
+    # when nothing works: connectivity false = wiring or baud; connectivity
+    # true with no detections = aim, thresholds, or the module's view blocked.
+
+  - platform: template
+    name: "Paths disagree"
+    id: path_disagree
+    device_class: problem
+    # UART says one thing, the OUT wire says another, for more than 5 minutes.
+    # Both come off the same radar by different routes, so sustained
+    # disagreement is a UART or component fault, not a sensing failure (§6.2).
+
+# -----------------------------------------------------------------------------
+sensor:
+  - platform: ld2410
+    moving_distance:
+      name: "Moving distance"
+      id: moving_distance
+      filters:
+        - throttle: 500ms
+      on_value:
+        - lambda: |-
+            if (x > 0) {
+              if (x < id(g_dmin)) { id(g_dmin) = x; id(dist_min).publish_state(x); }
+              if (x > id(g_dmax)) { id(g_dmax) = x; id(dist_max).publish_state(x); }
+            }
+    still_distance:
+      name: "Still distance"
+      filters:
+        - throttle: 500ms
+    moving_energy:
+      name: "Moving energy"
+      id: move_energy
+      filters:
+        - throttle: 500ms
+    still_energy:
+      name: "Still energy"
+      id: still_energy
+      filters:
+        - throttle: 500ms
+    detection_distance:
+      name: "Detection distance"
+      filters:
+        - throttle: 500ms
+    # NOTE: ESPHome already applies `throttle_with_priority: 1000ms` to every
+    # ld2410 sensor by default. Declaring `filters:` REPLACES that default, so
+    # the 500 ms above is a deliberate loosening for bench responsiveness, and
+    # the gate filters below are a deliberate tightening. Nothing here inherits.
+
+    # ---- the 18 gate energies -----------------------------------------------
+    # Gate n covers 0.75 m of range: g0 is 0.00-0.75 m, g8 is 6.00-6.75 m.
+    # The range is NOT in the entity name: it would slugify into ids like
+    # sensor.bench_mmwave_g0_move_0_00_0_75_m, which are unreadable and one
+    # typo away from silently not resolving. The ranges live on the
+    # dashboard labels instead, where a human reads them.
+    # Throttled to 1 s. This is a bench rig, not a 72-hour collection, so the
+    # recorder cost that forces 5 s in production does not apply here — but if
+    # you leave this running for days, go and read the RECORDER COST note in
+    # mmwave-node-common.yaml first.
+    g0:
+      move_energy:
+        name: "g0 move"
+        filters: &gate_rate
+          - throttle: 1s
+      still_energy:
+        name: "g0 still"
+        filters: *gate_rate
+    g1:
+      move_energy:
+        name: "g1 move"
+        filters: *gate_rate
+      still_energy:
+        name: "g1 still"
+        filters: *gate_rate
+    g2:
+      move_energy:
+        name: "g2 move"
+        filters: *gate_rate
+      still_energy:
+        name: "g2 still"
+        filters: *gate_rate
+    g3:
+      move_energy:
+        name: "g3 move"
+        filters: *gate_rate
+      still_energy:
+        name: "g3 still"
+        filters: *gate_rate
+    g4:
+      move_energy:
+        name: "g4 move"
+        filters: *gate_rate
+      still_energy:
+        name: "g4 still"
+        filters: *gate_rate
+    g5:
+      move_energy:
+        name: "g5 move"
+        filters: *gate_rate
+      still_energy:
+        name: "g5 still"
+        filters: *gate_rate
+    g6:
+      move_energy:
+        name: "g6 move"
+        filters: *gate_rate
+      still_energy:
+        name: "g6 still"
+        filters: *gate_rate
+    g7:
+      move_energy:
+        name: "g7 move"
+        filters: *gate_rate
+      still_energy:
+        name: "g7 still"
+        filters: *gate_rate
+    g8:
+      move_energy:
+        name: "g8 move"
+        filters: *gate_rate
+      still_energy:
+        name: "g8 still"
+        filters: *gate_rate
+
+    # ---- THE MODULE'S OWN PHOTODIODE -----------------------------------------
+    # "This module comes with a photo diode that can be used to detect the
+    # output light sensing value" — protocol V1.07 §2.2.18, p.18. The value
+    # rides along in the engineering-mode target data, so it costs nothing extra
+    # and it works on the bench with NO I2C and NO VEML7700.
+    #
+    # It is NOT a replacement for the VEML7700 and the design decision does not
+    # change. This is a raw 0-255 photodiode count, not calibrated lux, so a
+    # threshold set against it is specific to this one part in this one
+    # orientation — it transfers to nothing. Calibrated lux is exactly why the
+    # VEML7700 was chosen (§5.6): ~18 lx means the same thing on every node and
+    # survives a sensor swap. And the photodiode looks wherever the antenna
+    # looks, whereas the VEML7700 sits on a 150 mm cable and is aimed
+    # deliberately (§2).
+    #
+    # What it IS good for: a free sanity channel tomorrow, and a cross-check
+    # against the VEML7700 later. If they ever disagree in shape, one of them is
+    # dirty or blocked.
+    #
+    # CONFIRMED PRESENT on the ld2410 platform (not LD2412-only, as an earlier
+    # draft of this file guessed): ESPHome documents `light` as "When in
+    # engineering mode, indicates the light sensitivity, otherwise `unknown`.
+    # Value between 0 and 255."
+    #
+    # ENGINEERING MODE ONLY — it reads `unknown` with engineering mode off,
+    # which is the production default (§6.1). So this is a bench and
+    # commissioning instrument, not a telemetry channel.
+    light:
+      name: "Module photodiode"
+      id: module_light
+
+  # ---- bench instrumentation ------------------------------------------------
+  - platform: template
+    name: "Presence path skew"
+    id: path_skew
+    unit_of_measurement: "ms"
+    accuracy_decimals: 0
+    # Signed, published on the SECOND of the two presence edges. Positive means
+    # the UART frame arrived after the wire did. Both paths leave the same
+    # radar, so this is a direct measurement of what the UART decode costs you —
+    # and R2 gives the whole system a 1000 ms median budget, so it is worth
+    # knowing early how much of that is spent inside the node.
+
+  - platform: template
+    name: "Presence events since boot"
+    id: event_count
+    accuracy_decimals: 0
+    lambda: "return (float)id(g_events);"
+    update_interval: 2s
+
+  - platform: template
+    name: "Seconds since last event"
+    id: event_age
+    unit_of_measurement: "s"
+    accuracy_decimals: 0
+    lambda: |-
+      if (id(g_last_event_ms) == 0) return NAN;
+      return (millis() - id(g_last_event_ms)) / 1000.0f;
+    update_interval: 2s
+
+  - platform: template
+    name: "Closest detection seen"
+    id: dist_min
+    unit_of_measurement: "cm"
+    accuracy_decimals: 0
+  - platform: template
+    name: "Furthest detection seen"
+    id: dist_max
+    unit_of_measurement: "cm"
+    accuracy_decimals: 0
+    # The envelope since boot. Walk the room, then read these: the far number is
+    # your first real measurement against the 5.6 m acceptance target (§3.6),
+    # which the design doc is explicit is a TEST REQUIREMENT and not a
+    # calculated link budget. Press Node restart to reset the envelope.
+
+  - platform: wifi_signal
+    name: "RSSI"
+    update_interval: 30s
+  - platform: uptime
+    name: "Uptime"
+  - platform: internal_temperature
+    name: "Node temperature"
+
+# -----------------------------------------------------------------------------
+# NUMBERS — the tuning surface. Change one, watch presence change. That is the
+# entire point of a bench rig, and it is much cheaper to learn here than in a
+# dark family room.
+#
+# NO `initial_value` ON THE THRESHOLDS, deliberately: on the bench you want to
+# see what the MODULE currently holds in its own NVM, not overwrite it on every
+# boot. Press `Radar query params` to read the real values back.
+# -----------------------------------------------------------------------------
+number:
+  - platform: ld2410
+    timeout:
+      name: "Timeout"
+      # How long the module holds presence after the target leaves. Short (5-10 s)
+      # on the bench so you are not waiting around; production uses 30 s and puts
+      # the room-level hold in HA so the two cannot add up (see the TIMEOUT
+      # ARITHMETIC note in mmwave-node-common.yaml).
+    max_move_distance_gate:
+      name: "Max move gate"
+    max_still_distance_gate:
+      name: "Max still gate"
+      # Settable range is 2-8 (protocol V1.07 §2.2.3). The datasheet p.8 says
+      # "1 to 8"; the protocol doc is newer and is what the command obeys.
+      # Factory default for both is 8, with a 5 s no-one duration.
+      # Set these to the first gate BEYOND the far wall once you are in a real
+      # room — this is the through-wall mitigation for R6 (§5.2).
+
+    # g0/g1 still_threshold is REQUIRED by ESPHome's schema (cv.Required in
+    # every gX block) but INERT in the module — protocol V1.07 Table 7 marks
+    # static sensitivity for gates 0 and 1 "-(not settable)", 0-1.5 m being too
+    # close for static thresholding. Declared so the config compiles; expect
+    # moving these two to do nothing at all.
+    g0:
+      move_threshold: {name: "g0 move threshold"}
+      still_threshold: {name: "g0 still threshold"}
+    g1:
+      move_threshold: {name: "g1 move threshold"}
+      still_threshold: {name: "g1 still threshold"}
+    g2:
+      move_threshold: {name: "g2 move threshold"}
+      still_threshold: {name: "g2 still threshold"}
+    g3:
+      move_threshold: {name: "g3 move threshold"}
+      still_threshold: {name: "g3 still threshold"}
+    g4:
+      move_threshold: {name: "g4 move threshold"}
+      still_threshold: {name: "g4 still threshold"}
+    g5:
+      move_threshold: {name: "g5 move threshold"}
+      still_threshold: {name: "g5 still threshold"}
+    g6:
+      move_threshold: {name: "g6 move threshold"}
+      still_threshold: {name: "g6 still threshold"}
+    g7:
+      move_threshold: {name: "g7 move threshold"}
+      still_threshold: {name: "g7 still threshold"}
+    g8:
+      move_threshold: {name: "g8 move threshold"}
+      still_threshold: {name: "g8 still threshold"}
+
+select:
+  - platform: ld2410
+    distance_resolution:
+      name: "Gate resolution"
+      # 0.75 m per gate (default) or 0.2 m. Worth trying 0.2 m on the bench to
+      # see what it costs in total range — but the production nodes use 0.75 m,
+      # and changing it invalidates every threshold derived at the other setting.
+
+    # ---- `baud_rate` IS DELIBERATELY NOT EXPOSED --------------------------
+    # The ld2410 select platform offers one. It is omitted here, and this
+    # comment exists so the omission stays a decision rather than an accident
+    # somebody "fixes".
+    #
+    # THE MODULE HAS FIVE PINS AND NO RESET (DS §4.2). There is no hardware
+    # recovery. If it becomes unreachable over UART **and** Bluetooth is off,
+    # it is unrecoverable — and changing the baud rate is essentially the ONLY
+    # way to make a live module unreachable. Every other "UART failure" is a
+    # wire (fix the wire), an ESP (fix the ESP), or a dead radar (BT would not
+    # have saved it either).
+    #
+    # One accidental tap on a dropdown should not be able to brick a part with
+    # no reset pin. Removing the control removes the failure.
+    #
+    # RECOVERY IF IT EVER DOES HAPPEN, no Bluetooth required: `radar_baud` is a
+    # substitution at the top of this file. The documented rates are
+    #   9600  19200  38400  57600  115200  230400  256000(default)  460800
+    # Change the substitution, reflash, watch `Radar firmware`. Eight attempts,
+    # about ten minutes, and it needs nothing you do not already have.
+
+# -----------------------------------------------------------------------------
+interval:
+  # UART health: has the module ever answered?
+  - interval: 5s
+    then:
+      - lambda: |-
+          bool ok = id(radar_version).has_state()
+                    && !id(radar_version).state.empty()
+                    && id(radar_version).state != "unknown";
+          if (ok != id(uart_ok).state) {
+            id(uart_ok).publish_state(ok);
+            if (!ok) ESP_LOGW("bench", "no radar version yet - check crossover and baud");
+          }
+          // Self-test: UART up AND the radar has actually detected something at
+          // a plausible distance. Latches; cleared only by a node restart.
+          if (!id(g_selftest) && ok && id(presence_uart).state
+              && id(moving_distance).has_state() && id(moving_distance).state > 10.0f) {
+            id(g_selftest) = true;
+            id(selftest).publish_state(true);
+            ESP_LOGI("bench", "SELF-TEST PASSED - UART locked and radar detecting at %.0f cm",
+                     id(moving_distance).state);
+          }
+
+  # Two-path cross-check (§6.2). 300 s, because brief disagreement is EXPECTED:
+  # delayed_off is 2 s on one path and the module timeout is seconds to tens of
+  # seconds on the other.
+  - interval: 1s
+    then:
+      - lambda: |-
+          static uint32_t disagree_s = 0;
+          bool a = id(presence_uart).state;
+          bool b = id(presence_out).state;
+          if (a != b) { disagree_s++; }
+          else {
+            if (id(path_disagree).state) id(path_disagree).publish_state(false);
+            disagree_s = 0;
+          }
+          if (disagree_s > 300 && !id(path_disagree).state) {
+            id(path_disagree).publish_state(true);
+            ESP_LOGW("bench", "presence paths disagree %u s (uart=%d out=%d)",
+                     disagree_s, a, b);
+          }

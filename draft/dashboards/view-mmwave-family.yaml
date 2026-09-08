@@ -1,0 +1,358 @@
+# =============================================================================
+# DASHBOARD VIEW — Family Room mmWave node
+# Rev 0.1 DRAFT (2026-09-05).
+# -----------------------------------------------------------------------------
+# Same labelling panel as the office view, plus the overnight alarm controls.
+#
+# THE DISARM BUTTON IS DELIBERATELY LARGE AND ON THIS VIEW, not buried in a
+# settings page. Someone standing in a dark family room at 02:00 being flashed
+# at by their own house has about twenty seconds and no patience for navigation.
+# =============================================================================
+type: sections
+max_columns: 3
+icon: mdi:radar
+path: mmwave-family
+title: Family Room mmWave
+header:
+  card:
+    type: markdown
+    text_only: true
+    content: |
+      # Family room presence node
+      Tap what you are doing. Tap **No one present** when the room empties.
+
+badges:
+  - type: entity
+    entity: sensor.mmw_family_state
+    name: State
+  - type: entity
+    entity: sensor.family_mmwave_ambient_light
+    name: Lux
+  - type: entity
+    entity: binary_sensor.family_mmwave_presence
+    name: Presence
+  - type: entity
+    entity: binary_sensor.mmw_family_quiet_hours
+    name: Quiet hours
+  - type: entity
+    entity: input_boolean.mmw_family_alarm_enable
+    name: Alarm armed
+  - type: entity
+    entity: binary_sensor.mmw_family_label_contradicted
+    name: Label check
+
+sections:
+  # ---------------------------------------------------------------------------
+  - type: grid
+    column_span: 2
+    cards:
+      - type: markdown
+        text_only: true
+        content: "### What is happening now"
+
+      - type: horizontal-stack
+        cards:
+          - type: button
+            name: On couch
+            icon: mdi:sofa
+            icon_height: 56px
+            tap_action:
+              action: perform-action
+              perform_action: input_select.select_option
+              target:
+                entity_id: input_select.mmw_family_label
+              data:
+                option: sitting on couch
+          - type: button
+            name: In armchair
+            icon: mdi:seat-recline-normal
+            icon_height: 56px
+            tap_action:
+              action: perform-action
+              perform_action: input_select.select_option
+              target:
+                entity_id: input_select.mmw_family_label
+              data:
+                option: sitting in armchair
+
+      - type: horizontal-stack
+        cards:
+          - type: button
+            name: At kitchen table
+            icon: mdi:table-chair
+            icon_height: 56px
+            tap_action:
+              action: perform-action
+              perform_action: input_select.select_option
+              target:
+                entity_id: input_select.mmw_family_label
+              data:
+                option: sitting at kitchen table
+          - type: button
+            name: Working in kitchen
+            icon: mdi:countertop
+            icon_height: 56px
+            tap_action:
+              action: perform-action
+              perform_action: input_select.select_option
+              target:
+                entity_id: input_select.mmw_family_label
+              data:
+                option: working in kitchen
+
+      - type: horizontal-stack
+        cards:
+          - type: button
+            name: Walking through
+            icon: mdi:walk
+            icon_height: 56px
+            tap_action:
+              action: perform-action
+              perform_action: input_select.select_option
+              target:
+                entity_id: input_select.mmw_family_label
+              data:
+                option: walking through
+          - type: button
+            name: No one present
+            icon: mdi:account-off
+            icon_height: 56px
+            tap_action:
+              action: perform-action
+              perform_action: input_select.select_option
+              target:
+                entity_id: input_select.mmw_family_label
+              data:
+                option: no one present
+
+      - type: entities
+        title: Current label
+        entities:
+          - entity: input_select.mmw_family_label
+            name: Label (dropdown fallback)
+          - entity: sensor.mmw_family_cal_class
+            name: Recorded class
+          - entity: switch.family_mmwave_calibration_hold
+            name: Calibration hold (keeps eng mode on)
+
+  # ---------------------------------------------------------------------------
+  - type: grid
+    cards:
+      - type: markdown
+        text_only: true
+        content: >
+          ### Overnight alarm
+
+
+          Presence during quiet hours gives **two warning blinks**, then waits
+          the grace period before the full sequence. Hit disarm during those
+          seconds and nothing further happens tonight.
+
+
+          The alarm only fires on a transition into an empty room — someone
+          already asleep on the couch when quiet hours begin never produces one.
+
+      - type: button
+        name: DISARM TONIGHT
+        icon: mdi:shield-off
+        icon_height: 72px
+        tap_action:
+          action: perform-action
+          perform_action: input_boolean.turn_on
+          target:
+            entity_id: input_boolean.mmw_family_alarm_disarm_tonight
+
+      - type: entities
+        entities:
+          - entity: input_boolean.mmw_family_alarm_enable
+            name: Alarm armed
+          - entity: input_boolean.mmw_family_alarm_disarm_tonight
+            name: Disarmed for tonight
+          - entity: input_datetime.mmw_family_quiet_start
+            name: Quiet hours start
+          - entity: input_datetime.mmw_family_quiet_end
+            name: Quiet hours end
+          - type: divider
+          - entity: input_number.mmw_family_alarm_grace
+            name: Grace before escalation
+          - entity: input_number.mmw_family_alarm_flashes
+            name: Flash count
+          - entity: input_number.mmw_family_alarm_cooldown
+            name: Cooldown
+          - entity: input_datetime.mmw_family_alarm_last_fired
+            name: Last fired
+
+  # ---------------------------------------------------------------------------
+  - type: grid
+    cards:
+      - type: gauge
+        entity: sensor.family_mmwave_ambient_light
+        name: Ambient light
+        unit: lx
+        min: 0
+        max: 60
+        needle: true
+        severity:
+          green: 0
+          yellow: 18
+          red: 30
+
+      - type: entities
+        title: The controlled loads
+        entities:
+          - entity: switch.family_room
+            name: Family Room plug
+          - entity: switch.family_room_2
+            name: Lamp 1
+          - entity: switch.family_room_3
+            name: Lamp 2
+          - type: divider
+          - entity: sensor.family_room_signal_strength
+            name: Family Room plug Wi-Fi
+          - entity: sensor.family_room_signal_strength_2
+            name: Lamp 1 Wi-Fi
+          - entity: sensor.family_room_signal_strength_3
+            name: Lamp 2 Wi-Fi
+        # The three switch.family_room_led_* entities are deliberately absent.
+        # They are the plugs' own status indicators — one of them appearing on a
+        # lighting view is how somebody eventually toggles it and reports the
+        # lamp as broken.
+
+      - type: entities
+        title: Light control
+        entities:
+          - entity: input_number.mmw_family_lux_on
+            name: Turn on below
+          - entity: input_number.mmw_family_lux_off
+            name: Consider room lit above
+          - entity: input_number.mmw_family_idle_timeout
+            name: Idle timeout (total)
+          - entity: input_number.mmw_family_cmd_window
+            name: R4a command window
+          - type: divider
+          - entity: input_boolean.mmw_family_auto_enable
+            name: Automatic lighting
+          - entity: input_boolean.mmw_family_latch
+            name: Lights latched by presence
+          - entity: input_boolean.mmw_family_manual_override
+            name: Manual override active
+
+  # ---------------------------------------------------------------------------
+  - type: grid
+    column_span: 3
+    cards:
+      - type: markdown
+        text_only: true
+        content: >
+          ### Collection coverage
+
+
+          Targets: **6 h** empty spanning at least one heating or cooling cycle
+          (that class sets E_clutter and every move threshold with it), and
+          **1 h per seat** including one unbroken 10-minute run. The seat with
+          the least data is the seat the node will drop someone in.
+
+      - type: entities
+        entities:
+          - entity: sensor.mmw_family_hours_empty
+            name: Empty
+          - entity: sensor.mmw_family_hours_on_couch
+            name: On couch
+          - entity: sensor.mmw_family_hours_in_armchair
+            name: In armchair
+          - entity: sensor.mmw_family_hours_at_kitchen_table
+            name: At kitchen table
+          - entity: sensor.mmw_family_hours_working_in_kitchen
+            name: Working in kitchen
+          - entity: sensor.mmw_family_hours_walking_through
+            name: Walking through
+
+  # ---------------------------------------------------------------------------
+  - type: grid
+    column_span: 3
+    cards:
+      - type: history-graph
+        hours_to_show: 12
+        title: Presence, label and light
+        entities:
+          - entity: binary_sensor.family_mmwave_presence
+            name: Presence (UART)
+          - entity: binary_sensor.family_mmwave_presence_hardware_out
+            name: Presence (OUT wire)
+          - entity: binary_sensor.family_mmwave_moving_target
+            name: Moving
+          - entity: binary_sensor.family_mmwave_still_target
+            name: Still
+          - entity: input_select.mmw_family_label
+            name: Label
+          - entity: sensor.family_mmwave_ambient_light
+            name: Lux
+
+      - type: history-graph
+        hours_to_show: 2
+        title: Still energy by gate (the R1 signal)
+        entities:
+          - sensor.family_mmwave_g0_still
+          - sensor.family_mmwave_g1_still
+          - sensor.family_mmwave_g2_still
+          - sensor.family_mmwave_g3_still
+          - sensor.family_mmwave_g4_still
+          - sensor.family_mmwave_g5_still
+          - sensor.family_mmwave_g6_still
+          - sensor.family_mmwave_g7_still
+          - sensor.family_mmwave_g8_still
+
+      - type: history-graph
+        hours_to_show: 2
+        title: Move energy by gate (the false-trigger driver)
+        entities:
+          - sensor.family_mmwave_g0_move
+          - sensor.family_mmwave_g1_move
+          - sensor.family_mmwave_g2_move
+          - sensor.family_mmwave_g3_move
+          - sensor.family_mmwave_g4_move
+          - sensor.family_mmwave_g5_move
+          - sensor.family_mmwave_g6_move
+          - sensor.family_mmwave_g7_move
+          - sensor.family_mmwave_g8_move
+
+  # ---------------------------------------------------------------------------
+  - type: grid
+    column_span: 3
+    cards:
+      - type: entities
+        title: Independent witness — main floor thermostat
+        entities:
+          - entity: binary_sensor.main_floor_motion
+            name: Thermostat motion (PIR, fast, blind to stillness)
+          - entity: binary_sensor.main_floor_occupancy
+            name: Thermostat occupancy (held)
+          - entity: binary_sensor.mmw_family_empty_corroborated
+            name: Empty corroborated (both sensors agree)
+          - entity: binary_sensor.mmw_family_dropout_candidate
+            name: Dropout candidate
+          - entity: climate.main_floor
+            name: Zone (blower covariate)
+        # This block is NOT in the control path and must not be. PIR cannot see
+        # a motionless person, which is the whole reason the radar exists. It is
+        # here as a second opinion on the DATA, not as an input to the lights.
+
+      - type: entities
+        title: Node health (§6.2, §6.3)
+        entities:
+          - entity: binary_sensor.family_mmwave_presence_path_disagreement
+            name: UART vs OUT disagreement
+          - entity: sensor.family_mmwave_presence_path_skew
+            name: Path skew
+          - entity: binary_sensor.family_mmwave_lux_stale
+            name: Lux stale
+          - entity: sensor.family_mmwave_node_rssi
+            name: RSSI
+          - entity: sensor.family_mmwave_node_temperature
+            name: Node temperature
+          - entity: sensor.family_mmwave_node_uptime
+            name: Uptime
+          - entity: sensor.family_mmwave_node_reset_reason
+            name: Last reset reason
+          - entity: sensor.family_mmwave_radar_firmware
+            name: Radar firmware

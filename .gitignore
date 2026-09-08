@@ -1,0 +1,56 @@
+# =============================================================================
+# mmWave Presence Lighting Node — .gitignore
+# -----------------------------------------------------------------------------
+# Written 2026-09-07 when this project first went into version control.
+# =============================================================================
+
+# ---- CREDENTIALS -----------------------------------------------------------
+# The firmware here resolves every credential through !secret, and the file
+# those resolve against lives in the Home Assistant config, NOT in this repo.
+# This block exists so a copy can never wander in.
+#
+# HISTORY, because it nearly happened: draft/esphome/mmwave-bench.yaml carried
+# the Wi-Fi SSID and PSK, the API encryption key and the OTA password in
+# plaintext right up until this repo was created. A PSK committed once is
+# effectively permanent — it survives in history, in every clone and in every
+# fork, and later edits do not remove it. Private repos are not a boundary for
+# that: visibility gets flipped, tokens leak, forks outlive intentions.
+secrets.yaml
+secrets.yml
+*.secret
+*.key
+!*.kicad_sym
+
+# ---- KiCad generated / local ----------------------------------------------
+# Auto-backups are regenerated on every save and were 3.8 MB of zip churn.
+*-backups/
+# Per-user local project state — window layout, last-opened sheet. Not design.
+*.kicad_prl
+# Editor and tool leftovers
+*~
+*.bak
+*.bck
+*.kicad_pcb-bak
+*.kicad_sch-bak
+fp-info-cache
+\#auto_saved_files#
+
+# ---- Archives already present in extracted form ---------------------------
+# These directories are extractions of the .zip beside them. Keeping BOTH cost
+# ~15 MB of exact duplication. The zips are kept because they are the vendor
+# deliverable, unmodified and smaller (the Hi-Link 3D archive is 1.2 MB zipped
+# against 6.8 MB extracted). Extract locally when you need the contents.
+ld2410c-mmwave-sensor-1.snapshot.2/
+HLK-LD2410C-3D图/
+Adafruit VEML7700/
+
+# ---- Python ----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ---- OS --------------------------------------------------------------------
+Thumbs.db
+desktop.ini
+.DS_Store
