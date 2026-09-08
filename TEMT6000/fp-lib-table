@@ -1,4 +1,0 @@
-(fp_lib_table
-	(version 7)
-	(lib (name "SparkFun_TEMT6000_Breakout-Panel-v12-import-fps") (type "KiCad") (uri "${KIPRJMOD}/SparkFun_TEMT6000_Breakout-Panel-v12-import-fps.pretty") (options "kicad_import_cache=1") (descr ""))
-)

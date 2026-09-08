@@ -230,7 +230,7 @@
 			(uuid "fa474f47-1295-494b-afb3-7981d9ff0f49")
 		)
 		(embedded_fonts no)
-		(model "${KIPRJMOD}/M3 Screw.stp"
+		(model "${KIPRJMOD}/3d/M3 Screw.stp"
 			(offset
 				(xyz 0 0 0)
 			)
@@ -241,7 +241,7 @@
 				(xyz 0 0 0)
 			)
 		)
-		(model "${KIPRJMOD}/hexagonal_spacer_FF_M3_H10_HEX5.5_pass_through.step"
+		(model "${KIPRJMOD}/3d/hexagonal_spacer_FF_M3_H10_HEX5.5_pass_through.step"
 			(offset
 				(xyz 0 0 -11.6)
 			)
@@ -522,7 +522,7 @@
 				(xyz -180 -0 -0)
 			)
 		)
-		(model "${KIPRJMOD}/ld2410c-mmwave-sensor-1.snapshot.2/LD2410C mmWave Sensor.step"
+		(model "${KIPRJMOD}/3d/ld2410c-mmwave-sensor-1.snapshot.2/LD2410C mmWave Sensor.step"
 			(hide yes)
 			(offset
 				(xyz 7 -11 2.5)
@@ -534,7 +534,7 @@
 				(xyz -0 -0 -90)
 			)
 		)
-		(model "${KIPRJMOD}/HLK-LD2410C-3D图/HLK-LD2410C.step"
+		(model "${KIPRJMOD}/3d/HLK-LD2410C-3D图/HLK-LD2410C.step"
 			(hide yes)
 			(offset
 				(xyz 35 -162.5 3)
@@ -546,7 +546,7 @@
 				(xyz -0 -0 -90)
 			)
 		)
-		(model "${KIPRJMOD}/LD2410C mmWave Sensor.step"
+		(model "${KIPRJMOD}/3d/LD2410C mmWave Sensor.step"
 			(offset
 				(xyz 7 -11 2.5)
 			)
@@ -664,7 +664,7 @@
 			(uuid "20d505f7-e2b8-4422-a101-d0ccde8bda6b")
 		)
 		(embedded_fonts no)
-		(model "${KIPRJMOD}/M3 Screw.stp"
+		(model "${KIPRJMOD}/3d/M3 Screw.stp"
 			(offset
 				(xyz 0 0 0)
 			)
@@ -675,7 +675,7 @@
 				(xyz 0 0 0)
 			)
 		)
-		(model "${KIPRJMOD}/hexagonal_spacer_FF_M3_H10_HEX5.5_pass_through.step"
+		(model "${KIPRJMOD}/3d/hexagonal_spacer_FF_M3_H10_HEX5.5_pass_through.step"
 			(offset
 				(xyz 0 0 -11.6)
 			)
@@ -793,7 +793,7 @@
 			(uuid "87ba4f29-8640-4a63-8f76-f84579cbdfe0")
 		)
 		(embedded_fonts no)
-		(model "${KIPRJMOD}/M3 Screw.stp"
+		(model "${KIPRJMOD}/3d/M3 Screw.stp"
 			(offset
 				(xyz 0 0 0)
 			)
@@ -804,7 +804,7 @@
 				(xyz 0 0 0)
 			)
 		)
-		(model "${KIPRJMOD}/hexagonal_spacer_FF_M3_H10_HEX5.5_pass_through.step"
+		(model "${KIPRJMOD}/3d/hexagonal_spacer_FF_M3_H10_HEX5.5_pass_through.step"
 			(offset
 				(xyz 0 0 -11.6)
 			)
@@ -1702,7 +1702,7 @@
 				(xyz 0 0 0)
 			)
 		)
-		(model "${KIPRJMOD}/Dupont Jumper Wire F-F.step"
+		(model "${KIPRJMOD}/3d/Dupont Jumper Wire F-F.step"
 			(offset
 				(xyz 15 0 1.5)
 			)
@@ -1713,7 +1713,7 @@
 				(xyz -90 -0 -90)
 			)
 		)
-		(model "${KIPRJMOD}/Dupont Jumper Wire F-F.step"
+		(model "${KIPRJMOD}/3d/Dupont Jumper Wire F-F.step"
 			(offset
 				(xyz 15 -7.5 1.5)
 			)
@@ -1724,7 +1724,7 @@
 				(xyz -90 -0 -90)
 			)
 		)
-		(model "${KIPRJMOD}/Dupont Jumper Wire F-F.step"
+		(model "${KIPRJMOD}/3d/Dupont Jumper Wire F-F.step"
 			(offset
 				(xyz 15 -5 1.5)
 			)
@@ -1735,7 +1735,7 @@
 				(xyz -90 -0 -90)
 			)
 		)
-		(model "${KIPRJMOD}/Dupont Jumper Wire F-F.step"
+		(model "${KIPRJMOD}/3d/Dupont Jumper Wire F-F.step"
 			(offset
 				(xyz 165 -2.5 1.5)
 			)
@@ -2640,7 +2640,7 @@
 				(xyz -0 -180 -0)
 			)
 		)
-		(model "${KIPRJMOD}/Seeed-Studio-XIAO-ESP32-C3.step"
+		(model "${KIPRJMOD}/3d/Seeed-Studio-XIAO-ESP32-C3.step"
 			(offset
 				(xyz 6.1 -1.7 2.5)
 			)

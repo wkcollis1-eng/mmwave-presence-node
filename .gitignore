@@ -35,13 +35,22 @@ secrets.yml
 fp-info-cache
 \#auto_saved_files#
 
-# ---- Archives already present in extracted form ---------------------------
-# These directories are extractions of the .zip beside them. Keeping BOTH cost
-# ~15 MB of exact duplication. The zips are kept because they are the vendor
-# deliverable, unmodified and smaller (the Hi-Link 3D archive is 1.2 MB zipped
-# against 6.8 MB extracted). Extract locally when you need the contents.
-ld2410c-mmwave-sensor-1.snapshot.2/
-HLK-LD2410C-3D图/
+# ---- Vendor archives -------------------------------------------------------
+# REVISED 2026-09-08. The rule here used to be "commit the .zip, ignore the
+# extraction" — it cost ~15 MB less, and it was wrong for two of the three.
+#
+# The board names 3D models by path, and two of those paths point INSIDE these
+# extractions:
+#   U2 alt 1  ${KIPRJMOD}/3d/ld2410c-mmwave-sensor-1.snapshot.2/LD2410C mmWave Sensor.step
+#   U2 alt 2  ${KIPRJMOD}/3d/HLK-LD2410C-3D图/HLK-LD2410C.step
+# Ignoring those directories did not save 15 MB, it shipped a board file with
+# two references nothing in a fresh clone could resolve. Both are now committed.
+# They are hidden alternates, so the failure was silent — the 3D view looked
+# right and only the alternate was gone. That is why this is spelled out.
+#
+# Adafruit VEML7700/ stays ignored: the board has no footprint for that part
+# (it lives off-board on a QT cable, §3.1), so nothing references the
+# extraction, and the .zip beside it is the vendor deliverable.
 Adafruit VEML7700/
 
 # ---- Python ----------------------------------------------------------------

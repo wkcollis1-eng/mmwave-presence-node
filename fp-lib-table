@@ -1,4 +1,0 @@
-(fp_lib_table
-	(version 7)
-	(lib (name "Adafruit INA260") (type "KiCad") (uri "${KIPRJMOD}/lib/Adafruit INA260.pretty") (options "") (descr "Vendored 2026-09-07. Was an absolute path into C:/Users/wkcol/OneDrive/Desktop/, which made this project unopenable on any other machine and unopenable at all once that folder moves. The nickname is a misnomer inherited from its origin - it is a general-purpose local library, not an INA260 one."))
-)
