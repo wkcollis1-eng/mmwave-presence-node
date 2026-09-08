@@ -1,0 +1,86 @@
+# License
+
+This repository uses a three-way license model, because it contains three
+different kinds of work and one license does not fit all of them.
+
+| Content | Paths | License | SPDX |
+|---|---|---|---|
+| Hardware design | `hardware/` | CERN Open Hardware Licence v2 — Strongly Reciprocal | `CERN-OHL-S-2.0` |
+| Code | `esphome/`, `packages/`, `dashboards/`, `scripts/` | MIT | `MIT` |
+| Documentation | `docs/`, `README.md` | Creative Commons Attribution 4.0 International | `CC-BY-4.0` |
+
+**Third-party files are not covered by any of the above.** Several vendor 3D
+models and datasheets are redistributed here under their own terms, and one of
+them is non-commercial. See **[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)**
+before you assume anything about reuse.
+
+---
+
+## Hardware: CERN-OHL-S v2
+
+Everything under `hardware/` — the KiCad board, the gerbers and drill file, the
+enclosure DXF — is licensed under the **CERN Open Hardware Licence Version 2,
+Strongly Reciprocal**. Full text: **[LICENSE-HARDWARE](LICENSE-HARDWARE)**.
+
+You may study, modify, manufacture and sell boards based on this design. In
+exchange, if you convey a modified design or a product made from it, you must
+make the complete modified source available under the same license, and notify
+recipients of where to get it.
+
+The notice below applies to the hardware. If you modify the design, CERN-OHL-S
+§3.3(b) requires you to add your own notice saying what you changed and when.
+
+```
+Copyright (C) 2026 William K. Collis
+
+This source describes Open Hardware and is licensed under the CERN-OHL-S v2.
+
+You may redistribute and modify this source and make products using it under
+the terms of the CERN-OHL-S v2 (https://ohwr.org/cern_ohl_s_v2.txt).
+
+This source is distributed WITHOUT ANY EXPRESS OR IMPLIED WARRANTY, INCLUDING
+OF MERCHANTABILITY, SATISFACTORY QUALITY AND FITNESS FOR A PARTICULAR PURPOSE.
+Please see the CERN-OHL-S v2 for applicable conditions.
+
+Source location: https://github.com/wkcollis1-eng/mmwave-presence-node
+```
+
+Third-party 3D models shipped alongside the board are **Available Components**
+in the sense of CERN-OHL-S §1.7, and under §3.3(d) they remain licensed under
+their own terms rather than this one.
+
+## Code: MIT
+
+All ESPHome configuration, Home Assistant packages and dashboards, and Python
+scripts are licensed under the **MIT License**. Full text:
+**[LICENSE-CODE](LICENSE-CODE)**.
+
+## Documentation: CC BY 4.0
+
+The design document, draft notes, documentation review and this README are
+licensed under **Creative Commons Attribution 4.0 International**.
+
+Full license text: https://creativecommons.org/licenses/by/4.0/legalcode
+
+You may share and adapt them for any purpose, including commercially, provided
+you give appropriate credit and indicate if changes were made.
+
+---
+
+## Attribution examples
+
+When using the board design:
+
+> Hardware design from "mmWave Presence Lighting Node" by William K. Collis,
+> licensed under CERN-OHL-S v2.
+> https://github.com/wkcollis1-eng/mmwave-presence-node
+
+When using the documentation or measurements:
+
+> From "mmWave Presence Lighting Node" design document by William K. Collis,
+> licensed under CC BY 4.0.
+> https://github.com/wkcollis1-eng/mmwave-presence-node
+
+When using the code:
+
+> Based on code from mmwave-presence-node by William K. Collis (MIT License).

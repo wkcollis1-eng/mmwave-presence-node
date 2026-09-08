@@ -1,4 +1,17 @@
+<div align="center">
+
 # mmWave Presence Lighting Node
+
+**24 GHz Radar Presence Sensing for Room Lighting**
+
+[![Hardware: CERN-OHL-S v2](https://img.shields.io/badge/Hardware-CERN--OHL--S%20v2-orange.svg)](LICENSE-HARDWARE)
+[![Code: MIT](https://img.shields.io/badge/Code-MIT-blue.svg)](LICENSE-CODE)
+[![Docs: CC BY 4.0](https://img.shields.io/badge/Docs-CC%20BY%204.0-lightgrey.svg)](LICENSE)
+[![PCB](https://img.shields.io/badge/PCB-44%20%C3%97%2033%20mm-blueviolet.svg)](#hardware)
+[![Status](https://img.shields.io/badge/Status-Bench%20validated-yellow.svg)](#status)
+[![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-EA4AAA.svg?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/wkcollis1-eng)
+
+</div>
 
 A 24 GHz radar presence sensor that turns a room's lamps on when someone walks in
 and off some minutes after they leave — including for a person sitting still, in
@@ -144,6 +157,16 @@ Two things to know before you file a bug against the board:
 
 ## Third-party assets
 
+Full detail, including the terms that apply to each, is in
+**[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)**. These files are *not*
+covered by this repository's own licences.
+
+> **One file is non-commercial.** The LD2410C radar mesh
+> (`hardware/3d/LD2410C mmWave Sensor.step` and its snapshot directory) is
+> CC BY-NC 4.0. It is a 3D viewer mesh only — it is not in the gerbers, so it
+> does not restrict manufacturing this board. For commercial use, delete those
+> paths and render U2 with the Hi-Link model instead.
+
 | Asset | Origin | Note |
 |---|---|---|
 | `hardware/3d/LD2410C mmWave Sensor.step` | Community model | Creative Commons Non-Commercial — licence image ships in `ld2410c-mmwave-sensor-1.snapshot.2/` |
@@ -161,3 +184,49 @@ Every credential in this repository resolves through ESPHome `!secret`, and the
 `secrets.yaml` those resolve against lives in the Home Assistant config, **not
 here**. Git history has been scanned and contains no plaintext SSID, PSK, API
 encryption key or OTA password in any commit.
+
+---
+
+## License
+
+Three licences, because this repository holds three different kinds of work:
+
+| Content | Paths | Licence |
+|---|---|---|
+| Hardware design | `hardware/` | [CERN-OHL-S v2](LICENSE-HARDWARE) |
+| Code | `esphome/`, `packages/`, `dashboards/`, `scripts/` | [MIT](LICENSE-CODE) |
+| Documentation | `docs/`, this README | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
+
+See **[LICENSE](LICENSE)** for the full breakdown and attribution examples, and
+**[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)** for the vendor files that
+none of the above covers.
+
+CERN-OHL-S is strongly reciprocal: build the board, sell it, modify it — but if
+you convey a modified design or a product made from it, the modified source has
+to be available under the same terms.
+
+```
+Copyright (C) 2026 William K. Collis
+
+This source describes Open Hardware and is licensed under the CERN-OHL-S v2.
+
+You may redistribute and modify this source and make products using it under
+the terms of the CERN-OHL-S v2 (https://ohwr.org/cern_ohl_s_v2.txt).
+
+This source is distributed WITHOUT ANY EXPRESS OR IMPLIED WARRANTY, INCLUDING
+OF MERCHANTABILITY, SATISFACTORY QUALITY AND FITNESS FOR A PARTICULAR PURPOSE.
+Please see the CERN-OHL-S v2 for applicable conditions.
+
+Source location: https://github.com/wkcollis1-eng/mmwave-presence-node
+```
+
+---
+
+## 💝 Support This Project
+
+[![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-%E2%9D%A4-EA4AAA?style=for-the-badge&logo=githubsponsors&logoColor=white)](https://github.com/sponsors/wkcollis1-eng)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-ffdd00?logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/wkcollis)
+
+If this design document or the commissioning method saved you time on your own
+presence-sensing build, sponsorship funds continued instrumentation, hardware
+and documentation.
