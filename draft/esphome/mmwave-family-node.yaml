@@ -24,10 +24,29 @@ substitutions:
   # own hold only — short, so the two do not add.
   radar_timeout_s: "30"
 
-  # Placeholders. §5.2 replaces them with the first gate beyond the far wall.
-  # The 5.6 m acceptance target (§3.6) is gate 7 (5.25 m) to gate 8 (6.0 m); the
-  # kitchen end of an open-plan family room may need all 8. Measure it — R6
-  # (limiting through-wall detection) is bought with exactly this number.
+  # DECIDED 2026-09-07, no longer a placeholder. Gate 8 is deliberate here.
+  #
+  # Room measured off drawing A101: LIVING ROOM 17'-7" x 15'-2", fireplace
+  # centred on the 15'-2" east wall, so this node looks WEST along 17'-7".
+  #     far wall, on boresight   5.36 m   -> gate 7
+  #     far corners, diagonal    5.84 m   -> gate 7   (23 deg off boresight,
+  #                                                    well inside the ±60 cone)
+  # Gate 8 (6.00-6.75 m) is chosen over gate 7 to put margin beyond the far
+  # corners rather than ending exactly on them.
+  #
+  # THE WEST SIDE HAS NO WALL. The plan shows no partition to the KITCHEN
+  # (17'-5" x 18'-7") - one continuous space, broken only by an island - so the
+  # radar reaches roughly two feet past the living room into it. The owner
+  # decided on 2026-09-07 that someone at the island COUNTS as living-room
+  # occupied, so that reach is intentional and detection there is correct
+  # behaviour, not a false trigger.
+  #
+  # R6 therefore does NOT bind on the west side; there is no wall to see
+  # through. It still binds on the north and east exterior walls.
+  #
+  # CONTRAST WITH THE OFFICE, and this is why the two files exist: the office
+  # shares a wall with a bathroom, and bench work on 2026-09-07 showed rejecting
+  # it needs the MOVE path capped at gate 2. Same firmware, opposite settings.
   max_move_gate: "8"
   max_still_gate: "8"
 

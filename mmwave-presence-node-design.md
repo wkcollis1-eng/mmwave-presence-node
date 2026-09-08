@@ -439,6 +439,33 @@ Retained as directionally useful: window and standoff both impose modest penalti
 
 > **§5.2a is testing whether this part beats its own datasheet, not whether the installation is competent.** If the far end of the family room does not make 5.6 m, the first hypothesis is the part, not the aim. That is the opposite of the usual reading, and getting it backwards means re-aiming a sensor that was already pointed correctly.
 
+**Rev 1.6 — the room measured off the architectural plan, and the target slightly under-covers it.**
+
+Drawing A101 (*Edgewater Hill Lot 15, dream developers, 1.31.2021*) gives **LIVING ROOM 17'-7" × 15'-2"**, with the fireplace centred on the 15'-2" east wall. The node sits on that mantel, so it looks **west along the 17'-7" dimension** with roughly 7'-7" of room either side of boresight:
+
+| target | distance | gate |
+|---|---|---|
+| far wall, on boresight | 17'-7" = **5.36 m** | 7 (5.25–6.00 m) |
+| far corners, diagonal | 19'-2" = **5.84 m** | 7 |
+
+**The far corners are 5.84 m, which is beyond the 5.6 m target.** The number was set before the room was measured and it covers the far *wall*, not the far *corners*. Not a large miss, but it means a person standing in a west corner is outside the stated acceptance range, and §5.2a should be read with that in mind.
+
+Note also that the corners sit only **23° off boresight** — well inside the ±60° cone. So §3.6's "angle matters far more" caveat, true in general, is **not** the binding constraint in this room. Range is.
+
+**THE WEST SIDE HAS NO WALL, AND THAT IS A DECISION RATHER THAN A DEFECT.**
+
+The plan shows no partition between the living room and the **KITCHEN (17'-5" × 18'-7")** — it is one continuous space, broken only by an island. The sightline from the mantel does not stop at 17'-7"; it runs on roughly another 17 ft. At the module's ~6 m ceiling the radar reaches about two feet past the living room boundary, which is where the island is.
+
+That matters because **the living room's far wall and the kitchen's near boundary are the same plane at 5.36 m.** Unlike the office — where the bathroom sits in gates 3–4 and a person entering sits in gates 0–2, cleanly separable — here the wanted and unwanted returns are *coincident in range*. No max-gate setting distinguishes them, and there is no wall to attenuate one of them.
+
+> **DECIDED 2026-09-07 (owner): someone at the kitchen island COUNTS as "living room occupied".** The great room is one space for lighting purposes. Detection into the kitchen is therefore **correct behaviour, not a false trigger**, and there is nothing to tune out.
+
+Three consequences follow, and they are the reason this is written down:
+
+1. **The family node wants the LARGEST gate setting, not a restrictive one** — gate 8, so the far corners at 5.84 m are covered with margin and the island is reached deliberately.
+2. **R6 (limiting through-wall detection) does not apply on the west side**, because there is no wall there. It applies to the north and east exterior walls only, and to the office node in full.
+3. **§3.6's 5.6 m is a FAMILY-ROOM requirement and is not an office one.** The office needs the opposite — a bathroom shares its wall, and bench work on 2026-09-07 showed that rejecting it requires capping the *move* path at gate 2 (2.25 m). A single global acceptance range would be wrong for both rooms. The per-device substitution files are what carry that difference, and this is the clearest case of why they exist.
+
 DS §5.5 adds that the "longest distance will also fluctuate slightly" with target size, state and RCS — so expect the measured envelope to vary between people, not just between placements.
 
 **Coverage is established experimentally in §5.2a.**
