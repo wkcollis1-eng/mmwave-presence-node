@@ -830,6 +830,61 @@ worked", which on a bench being re-wired is the question you keep asking.
   U0TXD/U0RXD. The design's GPIO4/5 is now a well-evidenced departure rather
   than an untested preference.
 
+### 11.2c Who exposes the gate thresholds, and who pushes them — measured 2026-09-07
+
+Prompted by a claim that needed checking before it was published: that other
+projects had *given up* on setting gate variables from HA. Two of the three
+contradict it. Counts below are from reading their shipped configs, not from
+recollection.
+
+| | per-gate thresholds in HA | `number.set` actions | source of truth |
+|---|---|---|---|
+| Apollo MSR-2 | **yes — all 18**, + timeout + both max gates | **0** | module NVM |
+| Everything Presence Lite (ld2410-base) | **yes — all 18**, + timeout + both max gates | **0** | module NVM |
+| Screek 1U | **no** — g0–g8 thresholds present but commented out | 0 | HLKRadarTool, out of band |
+| **this project** | yes — all 18 | **21** | **git** |
+
+**Exposing the thresholds to HA is the common pattern, not a rare one.** Any
+claim of novelty resting on "you can set gate variables from Home Assistant" is
+refuted by two shipping products in about five minutes. Do not publish it.
+
+**Nobody pushes them, and that is the actual gap.** Zero `number.set` actions in
+either Apollo's or EPL's configs. Their thresholds live in module NVM and in
+whatever a user last typed into the UI; the YAML can declare values the radar
+does not hold, and nothing detects the divergence.
+
+That is not carelessness on their part — **the ESPHome `ld2410` number platform
+works against it.** It accepts no `initial_value` and no `restore_value`, so
+there is nothing to push *from*. Confirmed in Apollo's own file: it carries 15
+`initial_value` and 16 `restore_value` entries and **not one of them is on a
+radar number** — they are all on their own `template` numbers, because the
+ld2410 platform will not take them. §4.1 reached the same conclusion from the
+component source; this is the same hole seen from the other side, in production
+firmware, by a vendor who plainly knows the component well.
+
+**So the defensible claim is narrower and stronger than the one it replaces:**
+
+> Gate thresholds settable from Home Assistant are common. Gate thresholds
+> **held in version control, pushed into module NVM at boot, and verified by
+> read-back** appear not to exist elsewhere — and the ESPHome component
+> actively obstructs it, since its number platform has no initial value to push
+> from.
+
+Evidenced 2026-09-07 rather than asserted: all 21 commissioned values scrambled
+to distinct wrong numbers, node rebooted, **21/21 restored from the
+substitutions**, with `query_params` read-back as the proof rather than the log
+line. §5.9's statistical derivation is the second half of the claim and is
+**not yet run** — the honest position today is that the mechanism is proven and
+the method is designed.
+
+**One citation still needs pinning.** The design doc §5.0 quotes Screek as
+having "abandoned setting it in the esphome and used the HLKRadarTool
+configuration instead". Their commented-out thresholds are consistent with it,
+but that wording is **not** in `1u/yaml/human-sensor-1u-github.yaml`. Find the
+actual source — their docs site or a commit — before it appears in anything
+published, or drop the quotation and cite the commented-out block instead,
+which is directly checkable.
+
 ### 11.3 Independently confirmed
 
 `power_save_mode: none` appears in both community configs — arrived at
