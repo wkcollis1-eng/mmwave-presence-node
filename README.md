@@ -23,6 +23,7 @@ Assistant**.
 
 ![Board, top](hardware/mmWave%20Presence%20Lighting%20Node_TOP.png)
 ![Board, bottom](hardware/mmWave%20Presence%20Lighting%20Node_BOTTOM.png)
+![Board, VEML7700](hardware/Adafruit%20VEML7700%20Lux%20Sensor.png)
 
 ---
 
