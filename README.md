@@ -22,6 +22,7 @@ ESP32-C3** carrier board, running **ESPHome**, with the control logic in **Home
 Assistant**.
 
 ![Board, top](hardware/mmWave%20Presence%20Lighting%20Node_TOP.png)
+![Board, bottom](hardware/mmWave%20Presence%20Lighting%20Node_BOTTOM.png)
 
 ---
 
