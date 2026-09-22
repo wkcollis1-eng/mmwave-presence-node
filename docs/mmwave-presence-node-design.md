@@ -1,7 +1,23 @@
 # mmWave Presence Lighting Node — Design Document
 
-**Rev 1.6 — September 2026 — W. Collis**
+**Rev 1.7 — September 2026 — W. Collis**
 Targets: office and family room, East Hampton CT
+
+*Rev 1.6 → 1.7: **14.5 days of bench data (2026-09-08 → 22) and the ESPHome `ld2410` source at 2026.9.0, reviewed before assembly — 2026-09-22.** Firmware Rev 0.2 and package Rev 0.2 carry every change below, and both production nodes compile on 2026.9.0. One owner decision, two R13 corrections, three defects that would have blocked the first night.*
+
+*__Owner decision (Bill, 2026-09-22): the lamp stays on while the node is offline.__ §7. Once the node is back and has observed an empty room for the idle timeout, the lamp is released as normal.*
+
+*__R2 is not demonstrated.__ Over 14.5 days the HA-visible presence→lamp latency was median **1.359 s**, P95 **2.100 s**, n=60 [M] — against R2's 1.0 s / 1.5 s. Rev 1.6's "inside R2's budget" rested on n=2. The bench carried a 1 s control tick (presence→decision median 0.54 s [M]) that production does not; production's figure is unmeasured until the new latency sensors report. §8.*
+
+*__R13 — engineering mode is dropped by a module RESTART, not by config-mode entries.__ Rev 1.6 blamed "21 config-mode entries and exits". The source says otherwise: every timeout or max-gate write schedules `restart_and_read_all_info()` 200 ms later, and `set_bluetooth()` restarts too; gate-threshold writes alone do not. Engineering mode is now reconciled toward intent every 5 s (§6.1) — the pattern the bench keeper proved: 123 forced-off events, restored at a median 3.3 s, P95 10.3 s [M].*
+
+*__R13 — the package's helpers do not come up `unknown`.__ An `input_number` with no `initial:` and nothing to restore starts at its **minimum** (HA 2026.9.3 source). Rev 0.1 would have deployed with a 0 lx threshold (the lamp never lights), a 30 s office timeout and a 1 s command window, and none of its fallbacks could fire. 0 is now the "uncommissioned" sentinel and one automation seeds the starting values (R10). DRAFT-NOTES §2.6.*
+
+*__Blocking, found in review, in code the bench never ran:__ `Lux stale` published only on a change, so it read `unknown` for a healthy sensor for the node's whole life — and the package's `state: "off"` condition then refused every lamp-on. And presence edges from `unavailable` were ignored: 24 of 36 bench reconnects came back `on`, 12 `off` [M].*
+
+*__The R9 push is keyed to the first radar data frame, not the version string__ — the version is requested only at setup and after a restart, and never retried. Bluetooth OFF is now part of the push, because `restore_mode` on the ld2410 switches is inert. §5.0 step 0.4, §5.3a.*
+
+*__Tuning from data:__ office idle timeout 120 s from a 14.5-day replay (§5.5); `THRESHOLD_OFF` withdrawn — nothing read it (§5.6); the five radar summary series excluded from the recorder (§6.1).*
 
 *Rev 1.5 → 1.6: **first bench session with real hardware — 2026-09-07.** Everything below marked as measured was taken off the rig, not reasoned from a datasheet. Seven corrections and one retraction.*
 
@@ -644,6 +660,12 @@ If the node re-evaluated ambient light while the lamp it controls is on, and the
 
 **Starting threshold: ~18 lx.** The basement VEML7700 reads **23–25 lx** with the lights on and dim — a level at which nobody would reach for a switch — so the transition sits just below. Because the VEML7700 outputs calibrated lux, that number transfers directly to these nodes and to any replacement sensor. That portability is what an uncalibrated phototransistor could not give and is the reason it was chosen.
 
+**Rev 1.7 — as implemented in package Rev 0.2.** Three rules the pseudocode above leaves implicit:
+
+1. **An edge from `unavailable` or `unknown` is an edge.** A node or HA reconnecting into an occupied room produces `unavailable → on`, and on the bench 24 of 36 reconnects did [M]. `EMPTY_DARK` is entered on `on` from any non-`on` state; the empty-room release likewise counts `unavailable → off`, and still waits the full idle timeout.
+2. **Latch only a lamp this automation lit.** The on-edge requires the lamp to be off. Otherwise a person who lit the lamp by hand, left, and came back after their override cleared would have their lamp latched, and switched off at the next empty room.
+3. **Rev 1.6's deferral rule, bounded.** No lux reading at the edge means wait for one — up to 30 s, three VEML7700 polls — then leave the lamp alone for that occupancy and log it. Unbounded retry would hold an automation run open against a dead sensor; a sensor that has not reported in 30 s is a fault, and `Lux stale` reports it at 1 h.
+
 ### 4.3 Manual override detection (R4a)
 
 **Source of truth: the controlled switch's own reported state.** A change the node did not initiate is a manual intervention.
@@ -685,6 +707,8 @@ A sequence. Order matters — later steps assume earlier ones passed.
 | 0.12 | Record as-built antenna-to-window and antenna-to-backplane | §5.10 control |
 
 **Step 0.4 is not a persistence check — the reboot is part of the operation.** PR §2.2.12: *"the Bluetooth function of the module is **on by default**… After receiving this command, **a reboot is required for the function to take effect**."* Skip the reboot and the radio is still advertising while the switch reads off. Two further facts from the same source: an out-of-the-box module is advertising until this runs, and DS §6.3 gives the BLE configuration password as the default **"HiLink"**. That is the whole of §2's argument for shutting it down inside a sealed box — an unauthenticated config path with a known password, on a device with no other physical access.
+
+**Rev 1.7 — production firmware now closes Bluetooth itself, at every boot.** `restore_mode` on the ld2410 Bluetooth switch is inert: it is a `Switch` + `Parented`, not a `Component`, so nothing restores it [S, ESPHome 2026.9.0]. Rev 0.1 therefore left a factory module advertising indefinitely. Rev 0.2 writes BT off as part of the R9 push. **The SEQUENCING rule below is met by construction:** the push runs only after a radar data frame has arrived over the UART, so it cannot close the hatch before the UART is proven. What changes is that the app channel closes on the first boot of production firmware — do app-dependent bring-up on the bench firmware first. To reopen it on a commissioned node, turn `Radar Bluetooth` on from HA; it stays on until the node next boots. And note the switch's state is derived from the module's MAC query, not from the radio (§8), which is why step 0.4's pass criterion is the app.
 
 **Steps 0.2, 0.3, 0.7 and 0.8 collapse into one entity.** Borrowed from Apollo Automation's MSR-2 factory test, which gates each sensor on producing a *plausible value* rather than merely being present — for the radar, `has_target && detection_distance > 10`. The bench firmware carries this as a latching `Self-test passed` sensor, and it is a stronger criterion than "the UART answered": **a module with a damaged antenna, a blocked aperture, or thresholds left at 100 will answer `query_params` perfectly and detect nothing.** UART health proves the crossover and the baud rate. Only a detection proves the radar.
 
@@ -835,7 +859,7 @@ Per-gate thresholds live in module NVM and are **not** re-derived at power-on. S
 
 What *does* bake a person in is running the automatic background-noise routine while occupied. That routine is user-invoked: leave the room, press **Auto** in HLKRadarTool, it starts after 10 s and runs ~60 s.
 
-PR §2.2.20 confirms the mechanism this section warns about, in the manufacturer's own words: the routine *"will automatically calculate and record the energy value on each distance door under unmanned conditions… After the detection is completed, the sensitivity value of each distance door will be automatically configured based on the detected background noise value."* **It overwrites the committed thresholds in module NVM.** One useful accident of the §4.1 design: the `number` entities carry `restore_value: true`, so ESPHome pushes the YAML values back at the next boot — the git state reasserts itself without anyone intervening. Do not rely on that; it is a side effect, not a guard.
+PR §2.2.20 confirms the mechanism this section warns about, in the manufacturer's own words: the routine *"will automatically calculate and record the energy value on each distance door under unmanned conditions… After the detection is completed, the sensitivity value of each distance door will be automatically configured based on the detected background noise value."* **It overwrites the committed thresholds in module NVM.** One useful accident of the §4.1 design: the `number` entities carry `restore_value: true`, so ESPHome pushes the YAML values back at the next boot — the git state reasserts itself without anyone intervening. Do not rely on that; it is a side effect, not a guard. *Corrected Rev 1.7 (R13): the premise was wrong. The ld2410 `number` platform takes no `restore_value` (the firmware says so at the site), so nothing was being restored. What does reassert git at every boot is `push_commissioned_state`, the R9 push — by design, so it **is** the guard, and it is what overwrites an auto-calibration's result.*
 
 **Decision: do not use auto-calibration as the primary method.**
 
@@ -874,6 +898,20 @@ Second-order: a strong static reflector leaves cancellation residue that raises 
 
 Err long. The failure the occupant resents is the light going off on them. The failure nobody notices is it staying on five minutes too long. The timeout also sets the acceptance criterion in §5.9.3.
 
+**Rev 1.7 — office set to 120 s from a replay of the bench data.** Every gap in bench presence over 14.5 days, replayed against candidate totals: the lamp goes off when a gap plus the bench module's 5 s hold exceeds the total [D].
+
+| Total | Lamp-offs | Re-lit within 60 s |
+|---|---|---|
+| 60 s | 148 | 42 |
+| 90 s | 116 | 12 |
+| **120 s** | **106** | **4** |
+| 150 s | 104 | 5 |
+| 180 s | 102 | 4 |
+| 240 s | 98 | 3 |
+| 300 s | 95 | 1 |
+
+A lamp re-lit within a minute is the failure "the occupant resents", and 120 s is where those stop falling. Limits: bench presence at the **bench** position, not the mount; the gaps include real exits as well as dropouts and the data cannot separate them. Re-check after §5.2. The family room stays at 300 s — no data exists for it. The starting values live in one place, `mmw_seed_uncommissioned_helpers` in the package.
+
 ### 5.6 Light threshold
 
 The VEML7700 outputs **calibrated lux**, so thresholds are portable across nodes and survive a sensor swap.
@@ -882,6 +920,7 @@ The VEML7700 outputs **calibrated lux**, so thresholds are portable across nodes
 2. Log lux over 24 h in situ with the lamp **off**.
 3. `THRESHOLD_ON` ≈ **18 lx** — just below the 23–25 lx the basement reads when lit but dim.
 4. `THRESHOLD_OFF` ~20% above, for hysteresis on the empty-room re-evaluation.
+   *Withdrawn Rev 1.7.* §4.2 never re-evaluates lux while EMPTY — it samples at the dark→occupied edge only — so there was nothing for this to be the hysteresis of. The package's `lux_off` helpers were read by no automation and are removed.
 
 Then verify R4 directly: **turn the lamp on manually and confirm the reading is recorded but not acted upon.**
 
@@ -1065,6 +1104,10 @@ A daily 10-minute window gives 365 well-sampled points per gate per year — amp
 
 Lux, both presence paths and RSSI add to these; the figures are the gate series alone.
 
+**Rev 1.7 — the window is held open by a reconciler, not opened by a clock event.** Rev 0.1 opened it with one `on_time` and closed it from an interval. A one-shot open is lost to the next module restart, and any timeout or max-gate write restarts the module (§8). A reboot inside the window missed the open entirely, and releasing the calibration hold closed it early. Rev 0.2 computes *want = inside the window OR calibration hold* every 5 s and drives the switch toward it. The switch state is a genuine readback — it is published from every radar frame [S] — so the loop converges on what the module is actually doing. The midnight wrap of the window arithmetic was verified on the bench 2026-09-22 00:00–00:49 [M]; the open half is new code and is observed on the first night after deploy (§9).
+
+**Recorder, measured.** The bench wrote 361,794 rows in 24 h [M], with 5 s gates and engineering mode held on around the clock: 156,597 from the 18 gate series and 114,740 from the five radar summary series (distances and energies). The package now excludes those five — nothing reads their history. The gate series stay: they are this section's data, and in production they flow for the 10-minute window and labelled runs only.
+
 ### 6.2 The two-path cross-check
 
 The two presence paths disagreeing is the most useful diagnostic this node produces. Both derive from the same radar but travel different routes into the ESP. Sustained disagreement means the UART desynced or the component stalled — a failure that would otherwise look like "the sensor stopped working."
@@ -1109,9 +1152,13 @@ Every response is **re-run a documented procedure and commit the new values** �
 | Power blip | Brief gap, then recovery | Verified by A10 |
 | Radar module fails | No automatic presence | Wall switch; telemetry gap visible in Grafana |
 | VEML7700 or its cable fails | I²C errors; no light reading | Sanity bound: if lux unavailable >1 h, hold the last valid value and alert |
-| Node loses power | Lamp stays in last state | Wall switch |
+| Node offline — power loss, reboot, Wi-Fi | **Lamp holds its last state — decided, Bill 2026-09-22.** Released once the node is back and has seen an empty room for the idle timeout | Wall switch |
+| Tunable helper uncommissioned (reads 0) | Automations refuse to act; the seeding automation writes the starting value | `mmW <room> state` reads `UNCOMMISSIONED` |
+| No lux reading within 30 s of a presence edge | Lamp left alone for that occupancy; logbook entry | Wall switch; `Lux stale` alerts at 1 h |
 | Module replaced | Thresholds restored from YAML in seconds | R9 |
 | Light sensor replaced | **Threshold transfers unchanged** | calibrated lux — §5.6 |
+
+**Rev 1.7 — the offline row, measured and decided.** Over 14.5 days of bench data the lamp was on through 4 of 13 overnight outages, 35.9 h in total [M], and Bill ruled on 2026-09-22 that this is right: an outage must not plunge an occupied room into darkness, and the wall switch is always there. What was *not* right was after: the bench latch lived in RAM, so a lamp left on stayed on for a further 25.9 h after the node was back [M]. Rev 0.2 keeps the latch in an `input_boolean` that survives restarts and releases it on `unavailable → off` after the full wait. The Rev 0.2 package states `NODE_OFFLINE` instead of reading `EMPTY_LIT`.
 
 **The open item.** The control decision lives in Home Assistant, putting HA between presence and photons. Options: accept it under the convenience framing; move the decision to the ESP driving a smart relay with HA observing; or a local relay on the node, which turns a low-voltage sensor into a mains device.
 
@@ -1141,17 +1188,32 @@ Recommendation: accept HA-in-the-loop for the first build, revisit after a seaso
 
 | Item | Status | Source |
 |---|---|---|
+| **Presence → lamp, HA-visible, 14.5 days: median 1.359 s, P95 2.100 s, n=60** | ⚠️ **measured 2026-09-22 — R2 NOT demonstrated** | [M] `presence_uart` → `switch.office_lamp` on, HA timestamps, 2026-09-08 → 22; 43 of 60 over 1.0 s. R2 asks median ≤ 1.0 s, P95 ≤ 1.5 s. Leaves out the radar's detection time and the node→HA hop, includes the Kasa report lag — a strict bound in neither direction (R18). Its parts: the bench's 1 s control tick, presence → decision median 0.54 s [M]; decision → lamp median 0.733 s, P95 1.498 s, n=61 [M]. Production decides in HA on the edge with no tick; its figure is unmeasured until `sensor.mmw_*_presence_to_lamp_latency` reaches n ≥ 30 |
+| **Timeout and max-gate writes RESTART the module** | ✅ **source, 2026-09-22** | [S] ESPHome 2026.9.0 `components/ld2410/ld2410.cpp`, `set_max_distances_timeout()`: schedules `restart_and_read_all_info()` 200 ms later, and returns early unless all three numbers hold a state. `set_gate_threshold()` returns early unless both of that gate's numbers do. `set_bluetooth()` restarts too. So the push restarts the radar, drops engineering mode, and its write order is load-bearing |
+| **The version string is requested only at setup and after a restart** | ✅ source, 2026-09-22 | [S] `read_all_info()` is called from `setup()` and the restart path, and nothing retries it. Why the bench took 403 s is not established; the R9 push now keys on the first data frame instead |
+| **`restore_mode` is inert on the ld2410 Bluetooth and engineering-mode switches** | ✅ source, 2026-09-22 | [S] both are `Switch` + `Parented`, not `Component`s — nothing calls the restore. Bluetooth OFF is now written by the push (§5.0 step 0.4) |
+| **An `input_number` with no `initial:` and no restored state starts at its MINIMUM** | ✅ source, 2026-09-22 | [S] HA 2026.9.3 `components/input_number/__init__.py`, `async_added_to_hass`. Not `unknown`, as DRAFT-NOTES §2.6 assumed (R13 there). Rev 0.2: min 0 = uncommissioned, one seeding automation |
+| **`Lux stale` read `unknown` for a healthy sensor** | ❌ → ✅ **found in review, fixed in Rev 0.2** | Published only when the value changed from the template default. The package's `state: "off"` condition then blocked every lamp-on. The bench never showed it — its lamp logic ran on the node |
+| **Reconnects: 24 of 36 came back `on`, 12 `off`** | ✅ measured, 14.5 d | [M] `presence_uart` leaving `unavailable`. Rev 0.1's `from: "off"` / `from: "on"` triggers fired on none of them — §4.2 rule 1 |
+| **Lamp during node outages: on through 4 of 13 overnight outages, 35.9 h; on 25.9 h more after the node returned** | ✅ measured, 14.5 d | [M] The first is the decided behaviour (§7). The second was the bench's RAM latch; Rev 0.2 releases after a full observed-empty wait |
+| **`Presence path disagreement` never fired** | ✅ measured, 14.5 d | [M] The paths never disagreed for 300 s |
+| **Path skew: median 2 ms, n=64, with one artifact of 65,156 ms** | ✅ measured, 14.5 d | [M] The UART dropped and re-rose inside OUT's 2 s `delayed_off`, and only OUT's release cleared the edge stamps. Rev 0.2 clears them on either release |
+| **Engineering-mode keeper: 123 forced-off events, restored median 3.3 s, P95 10.3 s** | ✅ measured, 14.5 d | [M] The reconcile pattern Rev 0.2 uses (§6.1) |
+| **Module photodiode at lamp-off: median change 6.5 counts; crossed the threshold in 2 of 41** | ✅ measured, 14.5 d | [M] The radar module's photodiode at the bench position — not the VEML7700. Whether the lamp lifts the VEML7700 over `lux_on` is unmeasured |
+| **Office idle-timeout replay** | ✅ derived, 14.5 d | [D] §5.5 — 120 s chosen |
+| **Both production nodes compile on ESPHome 2026.9.0 (Rev 0.2)** | ✅ **measured 2026-09-22** | [M] `main.cpp.obj` built with 0 errors and 0 warnings; RAM 109,174 of 321,296 bytes, flash 967,508 of 1,835,008. Rev 0.2 has NOT been compiled on the 2026.4.3 `min_version` floor |
+| Radar firmware 2.44.25070917 | ✅ measured | [M] bench module, read back over the UART; §5.11 |
 | **`Radar firmware` populates 403 s after boot, not at boot** | ✅ **measured 2026-09-07** | Bench rig. MAC and `gate_resolution` come from the same deferred config read. Gating commissioning on any of them costs ~6.7 min per boot; engineering-mode gate frames prove the same thing in seconds |
-| **`switch.radar_bluetooth` is not a readback** | ✅ **measured 2026-09-07** | Read `off` while the module was connected to the Hi-Link app, `on` after a reflash with the radio untouched. §5.0 step 0.4's pass criterion moved to the app |
+| **`switch.radar_bluetooth` is not a readback** | ✅ **measured 2026-09-07** | Read `off` while the module was connected to the Hi-Link app, `on` after a reflash with the radio untouched. §5.0 step 0.4's pass criterion moved to the app. *Rev 1.7, the mechanism [S]: the state is set from the MAC query in `read_all_info()` (non-zero MAC = on) and optimistically on a write — it reports the last MAC read, never the radio* |
 | **The module streams UART and BLE concurrently** | ✅ **measured 2026-09-07** | 10 polls / 30 s with the app connected: continuous updates, zero stale reads. Closes §5.0's "unknown, worth observing" |
-| **Engineering mode does not survive a threshold push or a `Radar restart`** | ✅ **measured 2026-09-07** | Photodiode + all 18 gate energies `unknown` for 5 min 21 s after a push. PR §2.2.5 says volatile; this is what volatile costs. Production fires that push at boot |
+| **Engineering mode does not survive a threshold push or a `Radar restart`** | ✅ **measured 2026-09-07** | Photodiode + all 18 gate energies `unknown` for 5 min 21 s after a push. PR §2.2.5 says volatile; this is what volatile costs. Production fires that push at boot. *R13, Rev 1.7: the cause is the module restart each timeout/max-gate write schedules, not the config-mode entries (row above, 2026-09-22). Rev 0.2 reconciles it every 5 s* |
 | **R9: 21/21 restored from a fully scrambled radar by the boot push** | ✅ **measured 2026-09-07** | All 21 set to distinct wrong values, node rebooted, every one restored from substitutions. ~2 s for 21 writes |
 | **Gates 0/1 accept static-sensitivity WRITES despite PR Table 7** | ✅ **measured 2026-09-07** | Scramble took on `g0_still`/`g1_still` and reverted cleanly. The module stores what it will not use — the write path is not the inert part |
-| **End-to-end latency, presence → lamp physically on: 567 ms and 777 ms** | ✅ **measured 2026-09-07** | Node decision 278–777 ms (1 s control tick), HA → Kasa ~290 ms. Inside R2's 1000 ms median budget. This is the number R2 is actually about; the 2 ms path skew is not |
+| **End-to-end latency, presence → lamp physically on: 567 ms and 777 ms** | ✅ **measured 2026-09-07** | Node decision 278–777 ms (1 s control tick), HA → Kasa ~290 ms. Inside R2's 1000 ms median budget. This is the number R2 is actually about; the 2 ms path skew is not. *R13, Rev 1.7: n=2, below A1's n ≥ 30. Over 14.5 days, n=60, the HA-visible median was 1.359 s — "inside R2's budget" did not survive the larger sample (2026-09-22 row)* |
 | **Two-path skew: 2 ms** | ✅ **measured 2026-09-07** | UART frame vs the OUT wire, rising edges 0–1 ms apart across five transitions. Falling edges differ by 2.0–2.7 s, which is the `delayed_off: 2s` filter and is why §6.2 uses a 300 s window |
 | **Through-wall detection is real and was firing the lamp** | ✅ **measured 2026-09-07** | A person in the bathroom next door read 7.4–10.3 ft, gates 3–4, move energy 52 and 100 against thresholds of 30 and 20. Office entry is gates 0–2. §5.2's gate cap is not theoretical |
-| **§6.1's SPC window closes correctly** | ⚠️ **close verified 2026-09-07, open and midnight wrap not** | Closer fired 24 s after boot with `(now − start + 1440) % 1440` = 20. The `on_time` open half has never run, and the midnight wrap the `+1440` exists for needs an overnight run |
-| **Bench recorder cost: ~1.4 M rows/day at 1 s gates** | ✅ **measured 2026-09-07** | 18 gate series ≈ 44,500 rows/h alone. For scale the basement TH node is ~58,000/day and already carries exclusions. Gate period moved to 5 s; see `gate_log_period` in production |
+| **§6.1's SPC window closes correctly** | ⚠️ **close verified 2026-09-07; midnight wrap verified 2026-09-22; open half unobserved** | Closer fired 24 s after boot with `(now − start + 1440) % 1440` = 20. The `on_time` open half has never run, and the midnight wrap the `+1440` exists for needs an overnight run. *Rev 1.7: the wrap ran correctly on the bench 2026-09-22 00:00–00:49 [M]. Rev 0.2 replaces both halves with a reconciler; its open half is watched on the first night after deploy (§9)* |
+| **Bench recorder cost: ~1.4 M rows/day at 1 s gates** | ✅ **measured 2026-09-07** | 18 gate series ≈ 44,500 rows/h alone. For scale the basement TH node is ~58,000/day and already carries exclusions. Gate period moved to 5 s; see `gate_log_period` in production. *Rev 1.7: at 5 s, 361,794 rows in 24 h [M]; the five summary series are now excluded (§6.1)* |
 | LD2410C pin order TX/RX/OUT/GND/VCC | ✅ | **DS §4.2 Table 1** + photo. Numbering is 1=TX … 5=VCC — §3.2's table was inverted before Rev 1.5 |
 | **LD2410C operating voltage DC 5V, IO level 3.3V** | ✅ | **DS §7 and §5.1.** Supply capacity > 200 mA, average current 79 mA. DS §4.2 pin table adds "5~12V (advise 5V)". No documented 3.3V-only variant found |
 | **Radome standoff H = 1λ or 1.5λ; 12.4 / 18.6 mm at 24.125 GHz; ±1.2 mm** | ✅ | **DS §8.3, verbatim.** Previously the most load-bearing secondhand number in this document — now first-party |
@@ -1219,15 +1281,22 @@ Recommendation: accept HA-in-the-loop for the first build, revisit after a seaso
 
 1. **Inspect each radar module before first power-on (§5.0 step 0.0).** Hi-Link documentation is unambiguous — 5 V power, 3.3 V IO — but Amazon reviews describe a "v1.1" that is 3.3 V-only, and there is no authorised distributor for this part. U2 pin 1 is hard-wired to VBUS. **Recovery if a 3.3 V unit arrives: cut the VBUS trace at the pad and jumper to U1's 3V3 pin.** Know the fix before you need it.
 2. **Order nylon standoffs and screws.** 10 mm M3 (or 9 mm — decided at §5.0 step 0.9), plus screws and nuts. **Not in either cart.** Buy an assortment (8/9/10/12 mm). This is the one component that sets the radar window geometry and it has been outstanding for four revisions.
-3. **Verify cap lead pitch against footprints.** C1 is `C_Disc_D4.7mm_W2.5mm_P5.00mm` (5.00 mm) against FG28X5R1E106MRT00; C2/C3 are `P2.50mm` against K104K10X7RF53L2. Confirm before assembly.
+3. **Verify cap lead pitch against footprints.** C1 is `C_Disc_D4.7mm_W2.5mm_P5.00mm` (5.00 mm) against FG28X5R1E106MRT00; C2/C3 are `P2.50mm` against K104K10X7RF53L2. Confirm before assembly. *Corrected Rev 1.7, read from the board file 2026-09-22: C1 is `C_Disc_D5.0mm_W2.5mm_P2.50mm` — **2.50 mm**, not 5.00 — and C2/C3 are `C_Disc_D3.8mm_W2.6mm_P2.50mm`. The TDK lead spacing for FG28X5R1E106MRT00 is still unverified (its product page did not load). **Dry-fit C1 before soldering.***
 4. ~~**Fix the duplicate `H1` reference designator**~~ — **RESOLVED 2026-09-07.** H1, H2 and H3 are now distinct in the board file, confirmed by parsing all ten footprint references: no duplicates remain.
-5. **Build the schematic in Eeschema and generate the netlist.** The board has no net table, so KiCad cannot run connectivity or clearance DRC — every error across seven revisions was found by reading coordinates. This is the one gate still running on human attention.
+5. **Build the schematic in Eeschema and generate the netlist.** The board has no net table, so KiCad cannot run connectivity or clearance DRC — every error across seven revisions was found by reading coordinates. This is the one gate still running on human attention. *Corrected Rev 1.7: "no net table" is too strong. The pads carry net assignments — U1's D2/D3/D10/D4/D5, U2 pins 1–5 and R1 were all read back by parsing on 2026-09-22 — so KiCad's connectivity checks do run against the board's own nets. What is missing is an independent schematic to check those nets against: the board is its own reference.*
 6. ~~**Decide and implement the R4a manual-override detection path.**~~ ✅ **Closed 2026-09-05.** All four loads are TP-Link Kasa **HS103** plugs on the `tplink` integration — `switch.office_lamp`, and `switch.family_room` / `_2` / `_3` for the family room. The integration reports real switch state, so R4a is satisfied by state reporting and **no current sensing is needed** — no BOM change. One consequence: `tplink` polls, so §4.3's 2 s command window is too tight for a Wi-Fi plug and would read the node's own commands as manual intervention. It is now an `input_number` defaulting to 10 s, **to be set from the A8 measurement and recorded in the §5.8 baseline**.
 7. ~~Build the HA `input_select` for §5.3 labelling before the first collection.~~ ✅ **Built** — `packages/mmwave_presence.yaml`. One deliberate change from §5.3's list: `empty` and `empty_hvac` are **not** two labels. HVAC state is stamped automatically from the room's own zone (family → `climate.main_floor`, office → `climate.upstairs`), because asking a human to remember whether the blower was running is asking for a value the system already knows — and it will be wrong exactly during a January heating cycle, which is the collection B that drives every move threshold.
 8. ~~Write the §5.9 analysis script (sweep, L(T), autocorrelation, margins) and commit it with the config.~~ ✅ **Built** — `scripts/mmwave_calibrate.py`. Reads the recorder SQLite directly; **there is no InfluxDB in this config**, so §5.9.5's Flux templates target a bucket that does not exist and the recorder's 14-day purge is the collection deadline. Two method changes fell out of writing it, both in `DRAFT-NOTES.md` §2: the sweep's FPR target comes from **A6** (< 1.4e-4, so the expected false-sample count across the two-hour window is below one), not from the 0.005 that P99.5 invites; and seat occupancy is judged on median **lift over the empty median**, because testing against the empty P99.5 silently reclassifies a shadowed seat as an unoccupied gate and turns §5.9.4's stop condition into a shrug.
 9. **NEW — the thermostats are an independent witness, and the empty class needs one.** Both Ecobees expose motion and occupancy over `homekit_controller` (local push, ~1 s, not a cloud poll): `binary_sensor.main_floor_motion` / `_occupancy` and `binary_sensor.upstairs_*`. `E_clutter` is a tail percentile, so a few contaminated samples move it — and the contamination mechanism is mundane: you get up, forget to tap the label, and ten minutes of *you* land in the distribution that defines an empty room. On synthetic data, **10 minutes of mislabelled occupancy inside a 90-minute empty run drove E_clutter 15.5 → 58.5 and SM 1.86 → 0.49, condemning a good gate as "OVERLAP — STOP TUNING"** — a false stop that would have sent someone to move a sensor that was fine. `mmwave_calibrate.py --corroborate` intersects the empty class with the thermostat's agreement. **Run the analysis both ways.** These sensors are PIR and stay out of the control path entirely: a PIR cannot see a motionless person, which is the whole reason this document specifies a radar.
 
 **CANDIDATE, not yet accepted — extend the witness to collection C with iPhone room-presence. Recorded here to be refuted or confirmed on the first commissioning pass.** The thermostat PIR corroborates the *empty* class well: motion ⇒ not empty, and that is the direction that matters. It cannot corroborate the *occupied-motionless* class — a PIR going quiet through a 10-minute collection C run is indistinguishable from the subject having left, so a mid-run step-out silently contaminates `E_signal`'s lower tail and inflates SM. Same failure as above, opposite class. A phone carried on the subject and reported at **room level** (ESPresense / Bermuda / a fixed BLE beacon — **not** a home-level `device_tracker`, which cannot resolve the room) is the cheapest positive "subject still in the room" signal. Four caveats decide whether it earns its place: (1) it cleans the class *label*, not the interval — §5.3's autocorrelation lag and N_eff are what set the CI width and a presence entity does not touch them; (2) BLE room presence carries 5–30 s latency and dropout, so it can only gate long stable segments, never individual 1 Hz samples; (3) commissioning-only, never the control path — a phone left behind, a flat battery, or a guest with no phone all break it, the same discipline the PIR is held to; (4) a second corroborator shrinks the empty class further, and `E_clutter` is a P99.5 that already wants thousands of samples, so add it as an *optional additional* `--corroborate` witness and compare three ways (none / PIR / PIR+phone) rather than blindly intersecting. Verdict deferred to bring-up.
+
+10. **NEW Rev 1.7 — deploy Rev 0.2. Not done; each step is an act on the live house (R12).** (a) Generate two API keys into `H:/esphome/secrets.yaml` as `api_key_mmwave_office_node` and `api_key_mmwave_family_node`. (b) Copy the three node files to `H:/esphome/`. (c) Before the package goes live, turn the bench's `Lamp control enabled` off — otherwise the bench and the package both command `switch.office_lamp`. (d) Copy the package to `H:/packages/` and restart HA: new helpers, the recorder exclusion and the template triggers are not reloadable. Then observe: the seeding automation's logbook entries, and `mmW Office state` reading anything but `UNCOMMISSIONED`.
+11. **NEW — office max gates: measure at the mount.** The YAML still holds the 4 / 4 placeholders. The bench ran move 2 / still 4 to reject the bathroom (the §3.6 retraction), at the bench position.
+12. **NEW — first night after deploy: watch the reconciler open the SPC window.** 03:10 office, 03:40 family. The 18 gate series should appear for 10 minutes and then stop.
+13. **NEW — R2 in production.** Read `sensor.mmw_*_presence_to_lamp_latency` once n ≥ 30. Expected below the bench's 1.359 s because the 1 s tick is gone — [I], falsified by a production median at or above 1.359 s.
+14. **NEW — ESPHome 2026.9 warns that `ota: password` costs about 3.5 KB of flash and recommends `ota: encryption`.** Not changed: the password is a house-wide convention on every node, and moving off it is its own decision.
+15. **NEW — the `min_version` floor is still 2026.4.3,** and Rev 0.2 has not been compiled there. Re-run A1, A2 and A6 on 2026.9.0, then raise it.
 
 ---
 
@@ -1316,5 +1385,8 @@ Not included: enclosure (on hand), R1 (from stock), **standoffs (not yet ordered
 | Sustained-dropout limit | L(T) < IDLE_TIMEOUT / 3 | §5.9.3 |
 | A1 minimum sample size | n ≥ 30 | to support a P95 claim |
 | Light threshold, starting | ~18 lx | basement reads 23–25 lx lit-but-dim |
+| Idle timeout, starting | office 120 s, family 300 s | §5.5; set in one place — `mmw_seed_uncommissioned_helpers` |
+| Engineering-mode reconcile period | 5 s | §6.1 |
+| R9 push trigger | first radar data frame + 5 s | §4.1, §8 |
 | VEML7700 range / resolution | 0–120k lx / 0.0036 lx per count | Adafruit guide p.3 |
 | VEML7700 Vin | 3–5 V, match the logic level | Adafruit guide p.6 → 3V3 on the XIAO |

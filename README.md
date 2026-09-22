@@ -44,10 +44,11 @@ every threshold, and the measurements that set them, are in
 
 | | |
 |---|---|
-| Design document | **Rev 1.6**, September 2026 |
+| Design document | **Rev 1.7**, September 2026 |
 | PCB | **Fabricated and populated.** 44.0 × 33.0 mm, 2-layer, three built |
-| Bench validation | First session against real hardware **2026-09-07** — seven corrections and one retraction folded back into Rev 1.6 |
-| Firmware / HA config | **Rev 0.1 drafts.** The office and family node configs compile; the package and dashboards are not yet running against a live Home Assistant |
+| Bench validation | First session against real hardware **2026-09-07** — seven corrections and one retraction folded back into Rev 1.6. **14.5 days of bench data reviewed 2026-09-22** — folded into Rev 1.7 |
+| Firmware / HA config | **Rev 0.2, 2026-09-22.** Both node configs compile on ESPHome 2026.9.0 (`main.cpp.obj`, 0 errors). The package is parse-clean, and its new templates pass 75 two-direction render tests on the live HA template engine — but it is **not yet deployed**, so nothing has been certified by `check_config` |
+| Latency (R2) | **Not demonstrated.** Bench presence → lamp as HA saw it: median 1.359 s, P95 2.100 s, n=60, against R2's 1.0 s / 1.5 s. Production decides in HA without the bench's 1 s tick and now measures itself — design doc §8 |
 | Deployment | Not yet mounted in either room |
 
 The most consequential open question is recorded honestly in the design document
@@ -144,6 +145,10 @@ Two things to know before you file a bug against the board:
    connectivity or clearance DRC against a netlist — every error across seven
    revisions was found by reading coordinates. Building the schematic is open item
    §9.5 and is the one gate still running on human attention.
+   *Corrected 2026-09-22: too strong. The pads carry net assignments, so DRC's
+   connectivity check does run against the board's own nets — that is the
+   "0 unconnected items" below. What is missing is an independent schematic to
+   check those nets against.*
 2. **`kicad-cli pcb drc` reports 16 violations, and that is the expected baseline** —
    3 errors, 13 warnings, 0 unconnected items. **Compare against this baseline
    rather than expecting zero.** It breaks down as:

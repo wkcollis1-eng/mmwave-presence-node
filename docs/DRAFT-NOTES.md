@@ -140,6 +140,9 @@ against a synthetic recorder database with known answers** — see §7.
 **One firmware.** `mmwave-node-common.yaml` is the whole node. The two device
 files contain nothing but substitutions and an `!include`. Choosing the room is
 choosing which device file you flash.
+*(Rev 0.2, 2026-09-22: and each device's own `api: encryption: key:`. The
+common file used one shared `api_encryption_key`, which would have given both
+nodes the same key; the house convention is one key per device.)*
 
 Secrets needed in `esphome/secrets.yaml` (only `api_encryption_key` exists
 today): `wifi_ssid`, `wifi_password`, `ap_password`, `ota_password`. The
@@ -231,6 +234,26 @@ are fixed operational limits, these are commissioned values.
 They come up `unknown` until set, which is honest — it says nobody has
 commissioned this room yet. Every template reading them carries an explicit
 fallback, and the intended starting values are listed in the file.
+
+> **R13 — CORRECTED 2026-09-22. The paragraph above is false, and the no-`initial:`
+> decision survives only because of a fix it did not know it needed.** An
+> `input_number` with no `initial:` and no restored state starts at its
+> **minimum**, not `unknown` — HA 2026.9.3 `components/input_number/__init__.py`,
+> `async_added_to_hass`. So on first deploy every helper would have held a
+> plausible, silent, wrong value: `lux_on` 0 lx (nothing reads darker than 0, so
+> the lamp never lights), office idle timeout 30 s, command window 1 s, one alarm
+> flash. The "explicit fallbacks" (`| float(18)` and the rest) could never fire,
+> because the state was never `unknown`. I wrote this paragraph from what the
+> behaviour ought to be, not from the source — the R6 failure.
+>
+> **Package Rev 0.2:** every commissioned helper has `min: 0`, and 0 means
+> *uncommissioned*. Every reader refuses to act on a 0: the lamp is not lit, not
+> switched off, the override is not flagged, and the alarm does not run. One
+> automation, `mmw_seed_uncommissioned_helpers`, writes the starting values into
+> any helper reading 0, at startup and whenever one drops to 0. The values live
+> there and only there (R10). The fallbacks that were second copies of them
+> became `float(0)`. What this section set out to protect still holds: with no
+> `initial:`, a commissioned value survives restarts.
 
 Two exceptions, both argued in place: the quiet-hours `input_datetime` pair
 (a window with no value is worse than one re-seeding to 01:00–05:00) and the two
@@ -672,6 +695,7 @@ here — but every schema key, component dependency and id resolves on both.
 | key | what to put there |
 |---|---|
 | `api_encryption_key` | generate a fresh 32-byte base64 key — do **not** reuse the basement node's |
+| *superseded 2026-09-22* | *Rev 0.2 needs `api_key_mmwave_office_node` and `api_key_mmwave_family_node` instead — one fresh key each, following `api_key_mmwave_bench`* |
 | `ota_password` | any strong string |
 | `ap_password` | fallback-AP password, ≥8 chars |
 
