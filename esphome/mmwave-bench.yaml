@@ -178,6 +178,132 @@ substitutions:
   pin_radar_rx: GPIO5     # XIAO D3  <- module TX
   pin_radar_out: GPIO10   # XIAO D10 <- module OUT
 
+  # ---- THE LAMP (added 2026-09-07) ----------------------------------------
+  # §7 option 2: "move the decision to the ESP driving a smart relay with HA
+  # observing". The DECISION is already on-node (§4.2 interval below); this is
+  # only the execution path. HA is still in it and cannot be taken out of it —
+  # switch.office_lamp is a TP-Link Kasa device reachable only through HA — so
+  # §7's open item is narrowed, not closed. A local relay remains the only
+  # option that removes HA entirely, and it turns a low-voltage sensor into a
+  # mains device.
+  lamp_entity: switch.office_lamp
+
+  # ---- COMMISSIONED STATE (R9) --------------------------------------------
+  # Added 2026-09-07. These are the values `script.push_commissioned_state`
+  # writes into the module's NVM, mirroring production's mechanism exactly.
+  # They default to what the module was ALREADY holding on 2026-09-07 so a
+  # push is a no-op until you deliberately change one - which is how you test
+  # that the push works: change a value here, reflash, watch it land.
+  radar_timeout_s: "5"
+  # ---- RANGE GATING (R6 / §5.2 / §5.4) ------------------------------------
+  # 8 -> 2, MEASURED 2026-09-07 against three real false triggers.
+  #
+  # THE FAULT: the lamp came on three times in three minutes while the owner
+  # was in the BATHROOM next door (18:43:58, 18:45:04, 18:45:25), then once
+  # correctly from the office doorway (18:46:02). Per-gate move energies for
+  # those two cases separate completely:
+  #
+  #   gate            range         BATHROOM      DOORWAY     threshold
+  #   g0        0.00-0.75 m           11            77           50
+  #   g1        0.75-1.50 m           10            90           50
+  #   g2        1.50-2.25 m           21           100           40
+  #   g3        2.25-3.00 m           52            38           30
+  #   g4        3.00-3.75 m          100            28           20
+  #
+  # The bathroom is a gates 3-4 target (7.4-10.3 ft) with almost nothing in
+  # 0-2. The doorway is a gates 0-1 target (2.2-3.3 ft, sustained 90 s at
+  # 60-100 energy). Capping at gate 2 therefore drops the bathroom entirely
+  # and keeps the doorway with margin on BOTH axes: bathroom energy in the
+  # surviving gates peaks at 21 against a g2 threshold of 40.
+  #
+  # AN EARLIER VERSION OF THIS BLOCK SAID 4, derived from a reported "doorway
+  # at 11.3 ft". That figure was wrong - the doorway measures 2.2-3.3 ft, and
+  # 11.3 ft was most likely a `Furthest detection seen` max-hold. Gate 4 is
+  # exactly where the bathroom saturates at 100, so 4 would have preserved the
+  # single worst gate. Measurement beat the quoted number; §5.2 says set this
+  # from the coverage sweep, not from a remembered distance.
+  #
+  # 2 IS THE FLOOR - protocol V1.07 §2.2.3 gives the settable range as 2-8.
+  #
+  # IT MUST LIVE HERE, NOT IN HA. Typing 2 into the dashboard works until the
+  # next `Push commissioned state`, which writes these substitutions back over
+  # it. That is R9 doing its job, and it is why the commissioned value belongs
+  # in the file.
+  # CORRECTED AGAIN 2026-09-07, after a second office entry was measured.
+  # max_still_gate 2 WAS WRONG and would have broken seated presence. The two
+  # paths need DIFFERENT caps because the office uses them at different ranges:
+  #
+  #   office ENTRY   move, gates 0-2, all reaching 100   (walking past the unit)
+  #   office SEATED  still, gates 3-5, mean 86/74/63     (the chair, 7.4-12.3 ft)
+  #   BATHROOM       move, gates 3-4, 52 and 100         (module still stayed 8-16)
+  #
+  # The bathroom fired through the MOVE path, so capping MOVE at gate 2 removes
+  # it: its move energy inside gates 0-2 is only 11/10/21 against thresholds of
+  # 50/50/40. Office entry survives untouched at 100.
+  #
+  # STILL must reach gate 4 or the chair disappears the moment its occupant
+  # stops moving - the exact failure a radar was chosen over a PIR to avoid.
+  max_move_gate: "2"
+  max_still_gate: "4"
+
+  # ---- PUBLISH RATES — RECORDER COST --------------------------------------
+  # MEASURED 2026-09-07, and it is the reason the HA UI went sluggish:
+  #     one gate series        2,472 rows/h
+  #     18 gate series        44,500 rows/h
+  #     moving_distance        4,344 rows/h
+  #     detection_distance     4,806 rows/h
+  #     whole node          ~1.4 MILLION rows/day
+  # For scale, the basement TH node runs ~58,000 rows/day and the repo already
+  # carries recorder exclusions for it. This rig was ~25x that.
+  #
+  # gate_period 1s -> 5s cuts the dominant term by five. Drop it back to 1s for
+  # a focused 10-minute seat run where you need the fine structure, then put it
+  # back. That is the same knob production exposes as `gate_log_period`, for
+  # the same reason.
+  #
+  # DO NOT go below 1s: ESPHome's own default on these is
+  # `throttle_with_priority: 1000ms`, and declaring `filters:` REPLACES that
+  # default rather than adding to it.
+  # ---- DAILY SPC WINDOW (§6.1) — ported from production 2026-09-07 --------
+  # Production opens engineering mode at 03:10 and closes it ten minutes later,
+  # so the SPC pipeline gets a daily sample of the 18 gate energies without
+  # paying the recorder cost of leaving engineering mode on permanently.
+  #
+  # Set these a couple of minutes ahead of the clock to test it. `duration` is
+  # a BENCH AFFORDANCE that production does not have - production hardcodes 10
+  # in the lambda. Two minutes makes the test practical; put it back to 10
+  # before drawing any conclusion about production timing.
+  eng_window_hour: "23"
+  eng_window_minute: "50"
+  eng_window_minutes: "10"
+
+  gate_period: "5s"
+  dist_period: "1s"
+  g0_move: "50"
+  g0_still: "0"
+  g1_move: "50"
+  g1_still: "0"
+  g2_move: "40"
+  g2_still: "40"
+  g3_move: "30"
+  # g3_still 40 -> 55 (2026-09-07). Bathroom mean 20.9, office seated mean
+  # 85.6. Both peak at 99, so peaks cannot separate them - this sits above
+  # the bathroom's TYPICAL level while leaving the chair clear margin.
+  g3_still: "55"
+  g4_move: "20"
+  # g4_still 30 -> 55 (2026-09-07). Bathroom mean 29.9, office seated mean
+  # 74.2. Both peak at 99, so peaks cannot separate them - this sits above
+  # the bathroom's TYPICAL level while leaving the chair clear margin.
+  g4_still: "55"
+  g5_move: "15"
+  g5_still: "30"
+  g6_move: "15"
+  g6_still: "20"
+  g7_move: "15"
+  g7_still: "20"
+  g8_move: "15"
+  g8_still: "20"
+
   # ---- UART ----------------------------------------------------------------
   # 256000 is the documented factory default and the only rate worth trying
   # first. 9600 is a CONTINGENCY, not an equal alternative (§5.0 step 0.2): if
@@ -234,26 +360,11 @@ logger:
   # bridge uses UART0 instead: delete this line if your board has a bridge chip
   # and you get no serial output.
   hardware_uart: USB_SERIAL_JTAG
-  # NO PER-TAG OVERRIDE FOR ld2410 — it inherits DEBUG above, deliberately.
-  #
-  # An earlier draft set `logs: {ld2410: INFO}` to keep the log readable. That
-  # was a mistake with a specific mechanism: ESPHome's levels run
-  # NONE=0 ERROR=1 WARN=2 INFO=3 **CONFIG=4** DEBUG=5, so CONFIG is MORE
-  # verbose than INFO. Capping the tag at INFO suppressed everything at CONFIG
-  # and above — including the component's own config dump.
-  #
-  # The first flash proved it: every component printed a full config block
-  # except the radar. No entity list, no `Radar firmware`, no gate thresholds.
-  # The one component being brought up was the only one muted.
-  #
-  # `CONFIG` cannot be set here either — it exists as a C++ constant but the
-  # YAML schema rejects it (valid: NONE ERROR WARN INFO DEBUG VERBOSE
-  # VERY_VERBOSE). So the only way to keep the dump is DEBUG, which is what the
-  # global level already gives.
-  #
-  # If the frame chatter becomes unreadable once the radar is streaming, add
-  # `logs: {ld2410: INFO}` back — but know it costs the config dump, so turn it
-  # off again before diagnosing anything.
+  logs:
+    # The ld2410 component is chatty at DEBUG once it is working. Raise this to
+    # DEBUG while bringing the UART up, then leave it at INFO so the rest of the
+    # log is readable.
+    ld2410: INFO
 
 # Required by the `text_sensor: platform: debug` reset-reason sensor below.
 # Caught by `esphome config` — the bench file had the sensor without the
@@ -261,14 +372,15 @@ logger:
 debug:
   update_interval: 60s
 
-# CREDENTIALS MOVED TO !secret, 2026-09-07, before this project went into git.
-# This draft still carried the SSID, the Wi-Fi PSK, the API encryption key and
-# the OTA password in plaintext, while the deployed copy in /config/esphome/
-# had already been converted. A Wi-Fi PSK committed once is effectively
-# permanent: it survives in history, in every clone, and in every fork, and no
-# amount of later editing removes it. Private repositories are not a boundary
-# for this - visibility flips, tokens leak, and forks outlive intentions.
 wifi:
+  # Tell the TOOLING where to find this device. Default is
+  # <name>.local, which the ESPHome add-on cannot resolve: it runs in a
+  # container, and containers generally have no mDNS resolver. That is why
+  # the dashboard showed this device offline while HA was talking to it
+  # normally on the very same network.
+  # Read from this YAML by the dashboard - no reflash needed to take effect.
+  # Pair with a DHCP reservation, or this goes stale when the lease moves.
+  use_address: 10.0.0.57
   ssid: !secret wifi_ssid
   password: !secret wifi_password
   power_save_mode: none
@@ -342,6 +454,44 @@ globals:
     restore_value: false
     initial_value: 'false'
 
+  # ---- added 2026-09-07 ----------------------------------------------------
+  # Timestamp of the last engineering-mode gate frame. `UART healthy` now gates
+  # on THIS instead of the version string. Gate energies exist ONLY in
+  # engineering mode, which the ESP COMMANDS at boot, so a frame arriving here
+  # proves the command landed (ESP->module) AND the module is streaming back
+  # (module->ESP) - the same bidirectional proof the version read gives, but in
+  # seconds. Measured 2026-09-07: version took 403 s to populate, holding both
+  # `UART healthy` and `Self-test passed` at `unknown` for 6 min 43 s.
+  - id: g_last_gate_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: '0'
+  # ---- §4.2 control-logic emulation ---------------------------------------
+  - id: g_occupied
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  - id: g_latch
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  - id: g_vacant_since_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: '0'
+  # Calibration hold — set from HA for the duration of a labelled session so
+  # the nightly SPC window cannot switch engineering mode off mid-collection.
+  # Same role as production's global of the same name.
+  - id: g_cal_hold
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  # R9 push, once per boot, mirroring production.
+  - id: g_pushed
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+
 # -----------------------------------------------------------------------------
 switch:
   - platform: ld2410
@@ -362,6 +512,88 @@ switch:
       # Skip the reboot and the radio is still up while this switch reads off.
       # Default password for the BLE config channel is "HiLink" (§6.3) — which
       # is the whole argument for turning it off in a sealed box (§2).
+  - platform: template
+    name: "Push on boot (production behaviour)"
+    id: push_on_boot
+    optimistic: true
+    # ALWAYS_OFF -> RESTORE_DEFAULT_OFF, fixed 2026-09-07 by the test that was
+    # meant to exercise this switch and instead found it could never work.
+    #
+    # ALWAYS_OFF switches this OFF during boot, BEFORE the boot-push condition
+    # is evaluated. So a "do this at boot" flag reset itself at boot and could
+    # never once be true when it mattered - structurally incapable of its only
+    # job, and silent about it. Measured:
+    #     19:22:15  push_on_boot -> ON   (set by hand)
+    #     19:22:21  g4 move      -> 82   (marker set)
+    #     19:22:53  node restart
+    #     19:23:00  push_on_boot -> OFF  (reset by restore_mode)
+    #     19:23:00  g4 move      -> 82   (unchanged: no push ran)
+    #
+    # RESTORE_DEFAULT_OFF keeps the safe default on a fresh flash and lets the
+    # choice survive the reboot it exists to act on.
+    restore_mode: RESTORE_DEFAULT_OFF
+    entity_category: config
+    # OFF by default because this rig exists to read what the module's NVM
+    # ACTUALLY holds (see the NO initial_value note under `number:`). Turn it ON
+    # to exercise production's boot-push path. Production fires that push from
+    # the version text sensor - i.e. ~6.7 min into every boot. Here it fires off
+    # the rewritten UART-health signal instead, which is the point of the fix.
+  - platform: template
+    name: "Calibration hold"
+    id: cal_hold
+    icon: mdi:flask-outline
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+    entity_category: config
+    turn_on_action:
+      - lambda: "id(g_cal_hold) = true;"
+      - switch.turn_on: eng_mode
+    turn_off_action:
+      - lambda: "id(g_cal_hold) = false;"
+      - switch.turn_off: eng_mode
+    # Production's mechanism for holding engineering mode open across a
+    # labelled §5.9 collection run, so the nightly window cannot close it
+    # halfway through and truncate the sample.
+
+  - platform: template
+    name: "Keep engineering mode on"
+    id: eng_keeper
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    icon: mdi:lock-reset
+    # Engineering mode is VOLATILE (PR §2.2.5) and at least three things drop
+    # it. Measured on this rig, 2026-09-07:
+    #   * a threshold push - 21 config-mode entries and exits   (17:11:39)
+    #   * a Radar restart  - the module reboots                 (17:21)
+    #   * any module power loss
+    # `on_boot` only covers ESP boot, so after either of the first two the
+    # bench silently loses the photodiode AND all 18 gate energies, with
+    # nothing to report it - the entities simply read `unknown`, which is what
+    # "the light went unknown" was.
+    #
+    # Two earlier attempts failed by trying to enumerate the causes: a 500 ms
+    # delay after the push (lost the race, the writes drain asynchronously),
+    # then a bounded window armed by the push (correct for pushes, blind to
+    # Radar restart). This states the INTENT instead - the bench always wants
+    # engineering mode on, which is what the on_boot comment already says -
+    # and reconciles toward it from any cause, known or not.
+    #
+    # TO RUN WITH ENGINEERING MODE OFF, turn THIS off first, then the mode
+    # itself. Otherwise the reconciler will put it straight back.
+  - platform: template
+    name: "Lamp control enabled"
+    id: lamp_control_enabled
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    icon: mdi:lightbulb-on-outline
+    # The kill switch for the wiring above. ON by default because commanding
+    # the lamp is now the point, but it is here because a BENCH rig that
+    # reboots on every flash should not be able to strobe a real lamp in a
+    # room somebody is working in. Turn it off while tuning thresholds; the
+    # §4.2 logic and `Lamp should be ON` keep running either way, so the
+    # decision stays observable with the execution disconnected.
 
 button:
   - platform: ld2410
@@ -369,6 +601,7 @@ button:
       name: "Radar restart"
     query_params:
       name: "Radar query params"
+      id: radar_query
       # Press this after changing anything. It reads the module's ACTUAL
       # parameters back over UART, which is the only way to know a write landed.
     factory_reset:
@@ -377,6 +610,37 @@ button:
       # tuned yourself into a corner. It does NOT touch anything in this file.
   - platform: restart
     name: "Node restart"
+  - platform: template
+    name: "Scramble thresholds (test)"
+    icon: mdi:dice-multiple
+    on_press:
+      - script.execute: scramble_thresholds
+    # THE OTHER HALF OF THE R9 TEST. On 2026-09-07 the push was verified by
+    # hand-setting ONE threshold and watching it revert — which proved one
+    # write landed and said nothing about the other twenty, because writing 40
+    # over an existing 40 produces no state change in HA and is therefore
+    # indistinguishable from a write that was silently dropped.
+    #
+    # This sets all 21 to DISTINCT wrong values, so pressing it and then
+    # `Push commissioned state` makes every one of the 21 observable: anything
+    # still holding a scrambled value did not get written. The values are
+    # distinct from each other as well as from the YAML, so a partial push
+    # tells you exactly WHICH writes were lost — expect the tail of the
+    # sequence if the module drops any under back-to-back load.
+    #
+    # EXPECT TWO EXCEPTIONS: g0 and g1 still thresholds are inert in the module
+    # (protocol V1.07 Table 7 marks static sensitivity for gates 0-1 "not
+    # settable"), so they may not take the scrambled value at all. That is the
+    # module behaving as documented, not a dropped write.
+  - platform: template
+    name: "Push commissioned state"
+    icon: mdi:upload-lock
+    on_press:
+      - script.execute: push_commissioned_state
+    # R9 PROOF, and it has never been run. Writes all 21 substitution values
+    # into the module NVM, then presses `Radar query params` so HA re-reports
+    # what the module ACTUALLY holds. To prove the path end to end: change one
+    # threshold by hand in HA, press this, watch it snap back to the YAML value.
 
 text_sensor:
   - platform: ld2410
@@ -495,14 +759,128 @@ binary_sensor:
     # Both come off the same radar by different routes, so sustained
     # disagreement is a UART or component fault, not a sensing failure (§6.2).
 
+  # ---- §4.2 LAMP DECISION, added 2026-09-07 ----------------------------------
+  # The production control rule, run on-node so the bench can exercise it with
+  # no lamp, no HA automation and no light sensor beyond the module's own.
+  # This entity is what a lamp WOULD follow; nothing is switched.
+  - platform: template
+    name: "Lamp should be ON"
+    id: lamp_on
+    icon: mdi:lightbulb
+    # ---- THE WIRING, added 2026-09-07 ------------------------------------
+    # Until now this entity was an indicator and nothing followed it. It now
+    # commands ${lamp_entity} through HA.
+    #
+    # `homeassistant.action` was `homeassistant.service` until ESPHome 2024.8,
+    # which renamed it to match HA's own services-to-actions rename. The old
+    # form still validates but the dashboard offers a migration for it.
+    #
+    # REQUIRES A PER-DEVICE HA PERMISSION, and it is OFF by default. The
+    # config entry option is `allow_service_calls` (verified 2026-09-07 in
+    # .storage/core.config_entries: false on all four ESPHome devices here).
+    #
+    # HOW TO GRANT IT IS NOT WHERE YOU EXPECT. There is no Configure entry on
+    # the ESPHome integration page for it. Nothing requests the permission
+    # until the device actually attempts an action, at which point HA raises a
+    # REPAIR (Settings -> System -> Repairs) offering to allow it. So the
+    # order is: flash, trigger a lamp transition, then answer the repair.
+    #
+    # THE FAILURE IS SILENT FROM THE NODE'S SIDE. The action executes here and
+    # the log line below still prints; HA refuses it on arrival, and only HA's
+    # log says so. If `Lamp should be ON` goes true and `Lamp actual state`
+    # does not follow, this permission is the first thing to check.
+    #
+    # EDGE-TRIGGERED, NOT CONTINUOUS, and deliberately so. The node commands
+    # the lamp only at the two §4.2 transitions; it never re-asserts. So if
+    # somebody hits the wall switch the node does not fight them — the manual
+    # state simply stands until the next transition. That is a weaker form of
+    # §4.3 / R4a than the design calls for (which detects the override and
+    # clears the latch), and R4a is NOT implemented here. `Lamp actual state`
+    # below exists so divergence is at least VISIBLE while that stays open.
+    on_press:
+      - if:
+          condition:
+            switch.is_on: lamp_control_enabled
+          then:
+            - homeassistant.action:
+                action: switch.turn_on
+                data:
+                  entity_id: ${lamp_entity}
+            - logger.log: "LAMP -> ON  (commanded ${lamp_entity})"
+    on_release:
+      - if:
+          condition:
+            switch.is_on: lamp_control_enabled
+          then:
+            - homeassistant.action:
+                action: switch.turn_off
+                data:
+                  entity_id: ${lamp_entity}
+            - logger.log: "LAMP -> OFF (commanded ${lamp_entity})"
+
+  # What the lamp ACTUALLY did, read back from HA.
+  #
+  # THIS IS internal: true AND YOU CANNOT PUT IT ON A DASHBOARD. ESPHome sets
+  # that automatically on every `homeassistant` import platform, and it is
+  # right to: re-exporting HA's own state back to HA is a round trip that
+  # creates a second, laggier copy of switch.office_lamp. An earlier version of
+  # this comment claimed this entity was the observation channel for the
+  # dashboard. It is not, and it never appeared there (verified 2026-09-07).
+  #
+  # WHAT IT IS FOR: on-node logic and logs. §4.3 / R4a — detecting that the
+  # lamp changed without this node commanding it, and clearing the latch — has
+  # to read the lamp's real state ON THE NODE, and this is that input. R4a is
+  # still NOT implemented; this is the wiring it will need.
+  #
+  # FOR DASHBOARD VISIBILITY use switch.office_lamp directly, beside
+  # `Lamp should be ON`. Comparing intent against HA's own switch entity is
+  # simpler and one hop shorter than comparing it against a mirror of itself.
+  - platform: homeassistant
+    name: "Lamp actual state"
+    id: lamp_actual
+    entity_id: ${lamp_entity}
+
+# -----------------------------------------------------------------------------
+# DAILY SPC WINDOW, §6.1 — ported verbatim from mmwave-node-common.yaml so the
+# bench tests PRODUCTION'S code path rather than a re-implementation of it.
+#
+# !! THIS FIGHTS `Keep engineering mode on` — TURN THE KEEPER OFF TO TEST IT !!
+# The keeper re-asserts engineering mode within 5 s of finding it off, which is
+# exactly what the window's close does deliberately. With the keeper on, the
+# window will appear to close and immediately reopen, and the test reads as a
+# failure when both halves are actually working. The two are contradictory ON
+# PURPOSE: the bench wants engineering mode permanently on, production wants it
+# on for ten minutes a day.
+# -----------------------------------------------------------------------------
+time:
+  - platform: homeassistant
+    id: ha_time
+    on_time:
+      - seconds: 0
+        minutes: ${eng_window_minute}
+        hours: ${eng_window_hour}
+        then:
+          - switch.turn_on: eng_mode
+          - logger.log: "SPC window open: engineering mode ON"
+
 # -----------------------------------------------------------------------------
 sensor:
   - platform: ld2410
     moving_distance:
       name: "Moving distance"
       id: moving_distance
+      # UNITS - 2026-09-07. The module reports cm. HA was silently converting
+      # the device_class:distance sensors to INCHES while the template min/max
+      # below stayed in cm, so two different units sat side by side on one
+      # dashboard - and `Furthest detection seen` is how §3.6's 5.6 m
+      # acceptance target gets read. Everything now publishes FEET from the
+      # node, and device_class is cleared so HA cannot convert it again.
+      unit_of_measurement: "ft"
+      device_class: ""
+      accuracy_decimals: 1
       filters:
-        - throttle: 500ms
+        - throttle: ${dist_period}
+        - multiply: 0.032808399      # cm -> ft
       on_value:
         - lambda: |-
             if (x > 0) {
@@ -511,22 +889,30 @@ sensor:
             }
     still_distance:
       name: "Still distance"
+      unit_of_measurement: "ft"
+      device_class: ""
+      accuracy_decimals: 1
       filters:
-        - throttle: 500ms
+        - throttle: ${dist_period}
+        - multiply: 0.032808399      # cm -> ft
     moving_energy:
       name: "Moving energy"
       id: move_energy
       filters:
-        - throttle: 500ms
+        - throttle: ${dist_period}
     still_energy:
       name: "Still energy"
       id: still_energy
       filters:
-        - throttle: 500ms
+        - throttle: ${dist_period}
     detection_distance:
       name: "Detection distance"
+      unit_of_measurement: "ft"
+      device_class: ""
+      accuracy_decimals: 1
       filters:
-        - throttle: 500ms
+        - throttle: ${dist_period}
+        - multiply: 0.032808399      # cm -> ft
     # NOTE: ESPHome already applies `throttle_with_priority: 1000ms` to every
     # ld2410 sensor by default. Declaring `filters:` REPLACES that default, so
     # the 500 ms above is a deliberate loosening for bench responsiveness, and
@@ -546,7 +932,11 @@ sensor:
       move_energy:
         name: "g0 move"
         filters: &gate_rate
-          - throttle: 1s
+          - throttle: ${gate_period}
+        # UART LIVENESS WITNESS - see the interval block. Engineering-mode-only,
+        # so a frame here proves both directions of the UART in seconds.
+        on_value:
+          - lambda: "id(g_last_gate_ms) = millis();"
       still_energy:
         name: "g0 still"
         filters: *gate_rate
@@ -668,15 +1058,24 @@ sensor:
     update_interval: 2s
 
   - platform: template
+    name: "Idle countdown"
+    id: idle_countdown
+    unit_of_measurement: "s"
+    accuracy_decimals: 0
+    # Seconds until the lamp is released, once the room reads empty. Exists so
+    # the §4.2 timeout is something you can WATCH on the bench rather than infer
+    # from a lamp that changes state a minute and a half later.
+
+  - platform: template
     name: "Closest detection seen"
     id: dist_min
-    unit_of_measurement: "cm"
-    accuracy_decimals: 0
+    unit_of_measurement: "ft"
+    accuracy_decimals: 1
   - platform: template
     name: "Furthest detection seen"
     id: dist_max
-    unit_of_measurement: "cm"
-    accuracy_decimals: 0
+    unit_of_measurement: "ft"
+    accuracy_decimals: 1
     # The envelope since boot. Walk the room, then read these: the far number is
     # your first real measurement against the 5.6 m acceptance target (§3.6),
     # which the design doc is explicit is a TEST REQUIREMENT and not a
@@ -703,14 +1102,17 @@ number:
   - platform: ld2410
     timeout:
       name: "Timeout"
+      id: n_timeout
       # How long the module holds presence after the target leaves. Short (5-10 s)
       # on the bench so you are not waiting around; production uses 30 s and puts
       # the room-level hold in HA so the two cannot add up (see the TIMEOUT
       # ARITHMETIC note in mmwave-node-common.yaml).
     max_move_distance_gate:
       name: "Max move gate"
+      id: n_max_move
     max_still_distance_gate:
       name: "Max still gate"
+      id: n_max_still
       # Settable range is 2-8 (protocol V1.07 §2.2.3). The datasheet p.8 says
       # "1 to 8"; the protocol doc is newer and is what the command obeys.
       # Factory default for both is 8, with a 5 s no-one duration.
@@ -723,32 +1125,87 @@ number:
     # close for static thresholding. Declared so the config compiles; expect
     # moving these two to do nothing at all.
     g0:
-      move_threshold: {name: "g0 move threshold"}
-      still_threshold: {name: "g0 still threshold"}
+      move_threshold: {name: "g0 move threshold", id: n_g0_move}
+      still_threshold: {name: "g0 still threshold", id: n_g0_still}
     g1:
-      move_threshold: {name: "g1 move threshold"}
-      still_threshold: {name: "g1 still threshold"}
+      move_threshold: {name: "g1 move threshold", id: n_g1_move}
+      still_threshold: {name: "g1 still threshold", id: n_g1_still}
     g2:
-      move_threshold: {name: "g2 move threshold"}
-      still_threshold: {name: "g2 still threshold"}
+      move_threshold: {name: "g2 move threshold", id: n_g2_move}
+      still_threshold: {name: "g2 still threshold", id: n_g2_still}
     g3:
-      move_threshold: {name: "g3 move threshold"}
-      still_threshold: {name: "g3 still threshold"}
+      move_threshold: {name: "g3 move threshold", id: n_g3_move}
+      still_threshold: {name: "g3 still threshold", id: n_g3_still}
     g4:
-      move_threshold: {name: "g4 move threshold"}
-      still_threshold: {name: "g4 still threshold"}
+      move_threshold: {name: "g4 move threshold", id: n_g4_move}
+      still_threshold: {name: "g4 still threshold", id: n_g4_still}
     g5:
-      move_threshold: {name: "g5 move threshold"}
-      still_threshold: {name: "g5 still threshold"}
+      move_threshold: {name: "g5 move threshold", id: n_g5_move}
+      still_threshold: {name: "g5 still threshold", id: n_g5_still}
     g6:
-      move_threshold: {name: "g6 move threshold"}
-      still_threshold: {name: "g6 still threshold"}
+      move_threshold: {name: "g6 move threshold", id: n_g6_move}
+      still_threshold: {name: "g6 still threshold", id: n_g6_still}
     g7:
-      move_threshold: {name: "g7 move threshold"}
-      still_threshold: {name: "g7 still threshold"}
+      move_threshold: {name: "g7 move threshold", id: n_g7_move}
+      still_threshold: {name: "g7 still threshold", id: n_g7_still}
     g8:
-      move_threshold: {name: "g8 move threshold"}
-      still_threshold: {name: "g8 still threshold"}
+      move_threshold: {name: "g8 move threshold", id: n_g8_move}
+      still_threshold: {name: "g8 still threshold", id: n_g8_still}
+
+  # ---- §4.2 CONTROL SURFACE, added 2026-09-07 --------------------------------
+  # Production keeps these two in HA as input_numbers (packages/mmwave_presence
+  # .yaml) because the control decision lives in HA. On the bench they live on
+  # the node so the rig stays self-contained and needs no HA package - the LOGIC
+  # under test is identical, only the location differs.
+  - platform: template
+    name: "Light threshold (raw)"
+    id: n_light_threshold
+    optimistic: true
+    initial_value: 10
+    restore_value: true
+    min_value: 0
+    max_value: 255
+    step: 1
+    mode: box
+    entity_category: config
+    # RAW 0-255 PHOTODIODE COUNT, NOT LUX. Protocol V1.07 §2.2.18. This number is
+    # specific to THIS module in THIS orientation and transfers to nothing - it
+    # proves the control LOGIC, not the threshold VALUE. The production
+    # threshold is ~18 CALIBRATED LUX from the VEML7700 (§5.6), and that is the
+    # number that survives a sensor swap. Do not carry this value forward.
+    # POLARITY MEASURED 2026-09-07: higher = more light. Office ambient reads
+    # 18; a hand over the module reads 2. The default was 20, which sat ABOVE
+    # ambient - so the room read "dark" at normal office light and the lamp
+    # latched on every entry. 10 sits between the two measured states, so
+    # covering the module is a genuine dark->occupied test.
+  - platform: template
+    name: "Idle timeout"
+    id: n_idle_timeout
+    optimistic: true
+    initial_value: 90
+    restore_value: true
+    min_value: 5
+    max_value: 600
+    step: 5
+    unit_of_measurement: "s"
+    mode: box
+    entity_category: config
+    # §5.5: office 90 s, family room 300 s. This is the ROOM-level hold and it is
+    # deliberately separate from the module's own `Timeout` (5 s here) so the two
+    # cannot be silently added together - the TIMEOUT ARITHMETIC point in
+    # mmwave-node-common.yaml.
+    #
+    # restore_value ADDED 2026-09-07 to both control numbers. Without it every
+    # flash reset them to the YAML defaults — measured 17:10:40, a flash put the
+    # light threshold back from 75 to 10 and this from 15 to 90, silently
+    # discarding a bench session's tuning. `initial_value` is now the FIRST-BOOT
+    # default and the record of intent; runtime tuning survives a reflash.
+    #
+    # This does NOT weaken R9. R9 is about the RADAR's NVM holding values that
+    # exist nowhere in git — which is why the 21 gate thresholds deliberately
+    # keep no restore and are pushed from YAML. These two are bench display
+    # controls that drive no commissioned state. When a value here is settled,
+    # write it into initial_value; that is the commissioning step.
 
 select:
   - platform: ld2410
@@ -781,34 +1238,126 @@ select:
 
 # -----------------------------------------------------------------------------
 interval:
-  # UART health: has the module ever answered?
+  # ---------------------------------------------------------------------------
+  # UART HEALTH - REWRITTEN 2026-09-07. Two defects.
+  #
+  # 1. IT PUBLISHED ONLY ON CHANGE:  if (ok != id(uart_ok).state) { ... }
+  #    A template binary sensor that has never published reads `false`
+  #    internally while HA shows `unknown`. While the UART was coming up `ok`
+  #    was false, so the test was `false != false` and it never published. The
+  #    entity sat at `unknown` indefinitely - indistinguishable from a dead
+  #    instrument. Same bug fixed in `Paths disagree` below. THE SAME BUG IS IN
+  #    PRODUCTION, on `lux_stale` and on its own `path_disagree`.
+  #
+  # 2. IT GATED ON THE VERSION STRING - the slowest datum on the bus. Measured
+  #    2026-09-07: 403 s to populate, holding `UART healthy` AND `Self-test
+  #    passed` at `unknown` for 6 min 43 s after every boot, while gate
+  #    energies, distances and NVM thresholds all streamed correctly. The
+  #    version, the MAC and `gate_resolution` all arrive from the same deferred
+  #    config read, so any of them is a bad gate. Engineering-mode gate frames
+  #    prove the same thing in seconds - they exist ONLY in engineering mode,
+  #    which the ESP itself commanded at boot, so a frame arriving proves BOTH
+  #    directions of the UART.
+  # ---------------------------------------------------------------------------
   - interval: 5s
     then:
       - lambda: |-
-          bool ok = id(radar_version).has_state()
-                    && !id(radar_version).state.empty()
-                    && id(radar_version).state != "unknown";
-          if (ok != id(uart_ok).state) {
+          static bool uart_published = false;
+          bool fresh = id(g_last_gate_ms) != 0
+                       && (millis() - id(g_last_gate_ms)) < 5000;
+          bool have_version = id(radar_version).has_state()
+                              && !id(radar_version).state.empty()
+                              && id(radar_version).state != "unknown";
+          bool ok = fresh || have_version;
+          if (!uart_published || ok != id(uart_ok).state) {
             id(uart_ok).publish_state(ok);
-            if (!ok) ESP_LOGW("bench", "no radar version yet - check crossover and baud");
+            uart_published = true;
+            if (!ok) ESP_LOGW("bench", "no radar frames - check crossover and baud");
           }
-          // Self-test: UART up AND the radar has actually detected something at
-          // a plausible distance. Latches; cleared only by a node restart.
+          // Self-test: UART up AND a real detection at a plausible distance.
+          // Latches; cleared only by a node restart.
+          // THRESHOLD IS NOW IN FEET. 0.33 ft = 10 cm. The old literal was
+          // 10.0f in centimetres; left unchanged through the unit conversion it
+          // would have silently demanded a target at TEN FEET before passing.
           if (!id(g_selftest) && ok && id(presence_uart).state
-              && id(moving_distance).has_state() && id(moving_distance).state > 10.0f) {
+              && id(moving_distance).has_state() && id(moving_distance).state > 0.33f) {
             id(g_selftest) = true;
             id(selftest).publish_state(true);
-            ESP_LOGI("bench", "SELF-TEST PASSED - UART locked and radar detecting at %.0f cm",
+            ESP_LOGI("bench", "SELF-TEST PASSED - UART locked, radar detecting at %.1f ft",
                      id(moving_distance).state);
           }
+          // R9 push, once per boot, only when the switch is on.
+          if (ok && !id(g_pushed) && id(push_on_boot).state) {
+            id(g_pushed) = true;
+            ESP_LOGI("bench", "R9: UART proven - pushing commissioned state");
+            id(push_commissioned_state).execute();
+          }
+
+  # ---------------------------------------------------------------------------
+  # ENGINEERING-MODE KEEPER. See the `Keep engineering mode on` switch for the
+  # full history of why this is a reconciler and not an event handler.
+  #
+  # 5 s, not 1 s: turning engineering mode on is a config-mode command, and if
+  # the module is unreachable this would otherwise retry twelve times a minute
+  # for as long as the fault lasts.
+  # ---------------------------------------------------------------------------
+  - interval: 5s
+    then:
+      - lambda: |-
+          if (id(eng_keeper).state && !id(eng_mode).state) {
+            id(eng_mode).turn_on();
+            ESP_LOGI("bench", "engineering mode re-asserted by keeper");
+          }
+
+  # ---------------------------------------------------------------------------
+  # CLOSE THE DAILY SPC WINDOW, §6.1 — production's code, unchanged except that
+  # the 10-minute duration is a substitution here so it can be tested in two.
+  #
+  # Done as an interval rather than a second on_time because the close time is
+  # start + duration, and computing that in a cron expression across an hour
+  # boundary is a bug waiting to happen. This checks a wall-clock condition
+  # instead, which is correct at midnight, across DST, and after a reboot that
+  # lands mid-window.
+  #
+  # THE ARITHMETIC IS THE POINT OF THE TEST: `(now - start + 1440) % 1440`
+  # wraps correctly over midnight. It runs once a day at 03:10 in production,
+  # so a fault here surfaces as weeks of missing SPC data rather than an error.
+  # ---------------------------------------------------------------------------
+  - interval: 30s
+    then:
+      - if:
+          condition:
+            and:
+              - switch.is_on: eng_mode
+              - lambda: "return !id(g_cal_hold);"
+              - lambda: |-
+                  auto t = id(ha_time).now();
+                  if (!t.is_valid()) return false;
+                  int now_min   = t.hour * 60 + t.minute;
+                  int start_min = ${eng_window_hour} * 60 + ${eng_window_minute};
+                  int elapsed   = (now_min - start_min + 1440) % 1440;
+                  return elapsed >= ${eng_window_minutes} && elapsed < 60;
+          then:
+            - switch.turn_off: eng_mode
+            - logger.log: "SPC window closed: engineering mode OFF"
 
   # Two-path cross-check (§6.2). 300 s, because brief disagreement is EXPECTED:
   # delayed_off is 2 s on one path and the module timeout is seconds to tens of
-  # seconds on the other.
+  # seconds on the other. Measured 2026-09-07: falling edges differ by 2.0-2.7 s
+  # every cycle, rising edges by 0-1 ms.
   - interval: 1s
     then:
       - lambda: |-
           static uint32_t disagree_s = 0;
+          static bool armed = false;
+          // Both inputs must be real before this instrument means anything.
+          // Until then `unknown` is honest rather than merely unpublished.
+          if (!id(presence_uart).has_state() || !id(presence_out).has_state()) return;
+          // First tick with both inputs live: publish the healthy state so the
+          // entity can leave `unknown`. Without this it could ONLY leave
+          // `unknown` by reporting a FAULT - a health indicator invisible until
+          // it fails, which is exactly what it did for this rig's whole life.
+          if (!armed) { id(path_disagree).publish_state(false); armed = true; }
           bool a = id(presence_uart).state;
           bool b = id(presence_out).state;
           if (a != b) { disagree_s++; }
@@ -821,3 +1370,236 @@ interval:
             ESP_LOGW("bench", "presence paths disagree %u s (uart=%d out=%d)",
                      disagree_s, a, b);
           }
+
+  # ---------------------------------------------------------------------------
+  # §4.2 CONTROL LOGIC, emulated on-node. Added 2026-09-07.
+  #
+  #   EMPTY    -> on presence: sample light ONCE, latch the decision
+  #   OCCUPIED -> light is NOT re-evaluated
+  #   vacant for IDLE_TIMEOUT -> release the latch, lamp off
+  #
+  # The latch is the whole design. A node that re-read ambient light while the
+  # lamp it controls is on would see its own lamp push the reading over
+  # threshold, switch off, go dark, and switch back on. Forever.
+  # ---------------------------------------------------------------------------
+  - interval: 1s
+    then:
+      - lambda: |-
+          static bool lamp_published = false;
+          if (!lamp_published) { id(lamp_on).publish_state(false); lamp_published = true; }
+          if (!id(presence_uart).has_state()) return;
+
+          bool presence = id(presence_uart).state;
+          uint32_t now = millis();
+
+          if (presence) {
+            id(g_vacant_since_ms) = 0;
+            // COUNTDOWN WHILE OCCUPIED — changed 2026-09-07 after bench use.
+            // This published NAN here, so the entity read `unknown` for the
+            // WHOLE of every occupancy: 16 s on one cycle, 3 min 40 s on the
+            // next. `unknown` for an unbounded stretch is indistinguishable
+            // from a dead sensor, which is the same complaint that got
+            // `UART healthy` and `Paths disagree` fixed earlier today.
+            // It now shows the ARMED value - what the countdown will start
+            // from the moment the room empties - and re-publishes if the
+            // timeout number is changed mid-occupancy.
+            {
+              float armed = id(n_idle_timeout).state;
+              if (!id(idle_countdown).has_state()
+                  || id(idle_countdown).state != armed)
+                id(idle_countdown).publish_state(armed);
+            }
+            if (!id(g_occupied)) {
+              // §7 GUARD + TRANSITION INTEGRITY. Fixed 2026-09-07 after the
+              // first bench run of this logic, in which the lamp was never
+              // commanded during a six-minute occupancy.
+              //
+              // The light is sampled ONCE at this edge and never re-evaluated
+              // while occupied - that is the §4.2 latch, and it is correct.
+              // But it means CONSUMING this edge without a reading throws away
+              // the only chance this occupancy had to decide, and the decision
+              // cannot be revisited until the room has been empty for a FULL
+              // idle timeout.
+              //
+              // OBSERVED 2026-09-07: node booted 14:37:14 and presence went
+              // true within seconds - but the photodiode is ENGINEERING-MODE
+              // ONLY and engineering mode is commanded at boot+3s. The edge was
+              // consumed with no reading, the lamp stayed off through the whole
+              // occupancy, and it only latched at 14:49:25 - after a full 90 s
+              // vacancy had reset the state machine at 14:44:33.
+              //
+              // PRODUCTION HAS THE SAME RACE. The VEML7700 polls every 10 s, so
+              // a node rebooting into an occupied room can reach this edge
+              // before its first lux sample - and there the idle timeout is
+              // 90 s (office) or 300 s (family room).
+              //
+              // FIX: do not set g_occupied yet. Stay EMPTY and retry next tick,
+              // so the decision is DEFERRED rather than DISCARDED.
+              if (!id(module_light).has_state()) {
+                static uint32_t warned_ms = 0;
+                if (millis() - warned_ms > 30000) {
+                  warned_ms = millis();
+                  ESP_LOGW("bench", "presence but no light reading yet -"
+                                    " holding EMPTY, decision deferred");
+                }
+                return;
+              }
+              id(g_occupied) = true;
+              bool dark = id(module_light).state < id(n_light_threshold).state;
+              if (dark) { id(g_latch) = true; id(lamp_on).publish_state(true); }
+              ESP_LOGI("bench", "OCCUPIED: light=%.0f thr=%.0f -> %s",
+                       id(module_light).state, id(n_light_threshold).state,
+                       dark ? "LAMP ON (latched)" : "already lit, lamp stays off");
+            }
+          } else if (id(g_occupied)) {
+            if (id(g_vacant_since_ms) == 0) id(g_vacant_since_ms) = now;
+            uint32_t idle_ms = (uint32_t)(id(n_idle_timeout).state * 1000.0f);
+            uint32_t elapsed = now - id(g_vacant_since_ms);
+            id(idle_countdown).publish_state(
+                elapsed >= idle_ms ? 0.0f : (idle_ms - elapsed) / 1000.0f);
+            if (elapsed >= idle_ms) {
+              id(g_occupied) = false;
+              id(g_vacant_since_ms) = 0;
+              if (id(g_latch)) {
+                id(g_latch) = false;
+                id(lamp_on).publish_state(false);
+                ESP_LOGI("bench", "EMPTY %.0f s - LAMP OFF, latch released",
+                         id(n_idle_timeout).state);
+              }
+            }
+          }
+
+# -----------------------------------------------------------------------------
+# R9: THE COMMISSIONED-STATE PUSH. Mirrors production's
+# `script.push_commissioned_state` exactly, including firing `Radar query
+# params` at the end so HA re-reports what the module ACTUALLY holds rather
+# than what we believe we wrote. The read-back is the proof; the write is not.
+#
+# WHY THIS EXISTS AT ALL: the ld2410 `number` entities REFLECT the module's NVM
+# and WRITE on change - they do NOT push at boot. So thresholds sitting in YAML
+# are not in the radar until something pushes them, and "the commissioned state
+# is reproducible from version control" would be true of the file and false of
+# the hardware. Production fires this from the version text sensor's on_value,
+# which we measured at 403 s - so production runs on whatever its NVM already
+# held for the first ~6.7 minutes of every boot.
+#
+# UNPROVEN AND UNDER TEST: 21 `number.set` calls back to back with no delay,
+# each entering config mode, writing, and exiting. Whether all 21 land is
+# exactly what this rig is now for. Watch the read-back, not the log line.
+# -----------------------------------------------------------------------------
+script:
+  - id: push_commissioned_state
+    mode: single
+    then:
+      - number.set:
+          id: n_timeout
+          value: ${radar_timeout_s}
+      - number.set:
+          id: n_max_move
+          value: ${max_move_gate}
+      - number.set:
+          id: n_max_still
+          value: ${max_still_gate}
+      - number.set:
+          id: n_g0_move
+          value: ${g0_move}
+      - number.set:
+          id: n_g0_still
+          value: ${g0_still}
+      - number.set:
+          id: n_g1_move
+          value: ${g1_move}
+      - number.set:
+          id: n_g1_still
+          value: ${g1_still}
+      - number.set:
+          id: n_g2_move
+          value: ${g2_move}
+      - number.set:
+          id: n_g2_still
+          value: ${g2_still}
+      - number.set:
+          id: n_g3_move
+          value: ${g3_move}
+      - number.set:
+          id: n_g3_still
+          value: ${g3_still}
+      - number.set:
+          id: n_g4_move
+          value: ${g4_move}
+      - number.set:
+          id: n_g4_still
+          value: ${g4_still}
+      - number.set:
+          id: n_g5_move
+          value: ${g5_move}
+      - number.set:
+          id: n_g5_still
+          value: ${g5_still}
+      - number.set:
+          id: n_g6_move
+          value: ${g6_move}
+      - number.set:
+          id: n_g6_still
+          value: ${g6_still}
+      - number.set:
+          id: n_g7_move
+          value: ${g7_move}
+      - number.set:
+          id: n_g7_still
+          value: ${g7_still}
+      - number.set:
+          id: n_g8_move
+          value: ${g8_move}
+      - number.set:
+          id: n_g8_still
+          value: ${g8_still}
+      - logger.log: "R9: commissioned thresholds pushed from YAML into module NVM"
+      - button.press: radar_query
+      # ---- RESTORE ENGINEERING MODE ---------------------------------------
+      # MEASURED 2026-09-07: without this the push leaves engineering mode OFF.
+      # The photodiode went `unknown` for 5 min 21 s and every gate energy
+      # stopped, starting the exact second the push landed. 21 number.set calls
+      # each enter and exit config mode, and engineering mode is volatile
+      # (PR §2.2.5). Nothing reported it — the entities simply went quiet.
+      #
+      # PRODUCTION FIRES THIS PUSH AT BOOT, so production would kill its own
+      # gate telemetry on every startup and §6.1's SPC window would sample
+      # nothing. mmwave-node-common.yaml needs the same restore.
+      # Engineering mode is restored by the keeper reconciler, not from here -
+      # the writes above are still draining out of the UART when this line runs,
+      # so nothing arm-and-wait can be timed correctly at this point.
+
+  # ---------------------------------------------------------------------------
+  # SCRAMBLE — deliberately wrong, deliberately DISTINCT values.
+  # Distinct so a partial push is diagnosable: whichever entities still hold a
+  # scrambled number after a push are the writes that did not land. All values
+  # sit inside the module's legal ranges (thresholds 0-100, gates 2-8), so a
+  # value that fails to take is the module refusing it, not a range rejection.
+  # ---------------------------------------------------------------------------
+  - id: scramble_thresholds
+    mode: single
+    then:
+      - number.set: {id: n_timeout,   value: 9}
+      - number.set: {id: n_max_move,  value: 7}
+      - number.set: {id: n_max_still, value: 6}
+      - number.set: {id: n_g0_move,   value: 61}
+      - number.set: {id: n_g0_still,  value: 62}
+      - number.set: {id: n_g1_move,   value: 63}
+      - number.set: {id: n_g1_still,  value: 64}
+      - number.set: {id: n_g2_move,   value: 65}
+      - number.set: {id: n_g2_still,  value: 66}
+      - number.set: {id: n_g3_move,   value: 67}
+      - number.set: {id: n_g3_still,  value: 68}
+      - number.set: {id: n_g4_move,   value: 69}
+      - number.set: {id: n_g4_still,  value: 70}
+      - number.set: {id: n_g5_move,   value: 71}
+      - number.set: {id: n_g5_still,  value: 72}
+      - number.set: {id: n_g6_move,   value: 73}
+      - number.set: {id: n_g6_still,  value: 74}
+      - number.set: {id: n_g7_move,   value: 75}
+      - number.set: {id: n_g7_still,  value: 76}
+      - number.set: {id: n_g8_move,   value: 77}
+      - number.set: {id: n_g8_still,  value: 78}
+      - logger.log: "TEST: thresholds scrambled - now press Push commissioned state"
+      - button.press: radar_query
