@@ -154,8 +154,11 @@ sections:
         entities:
           - entity: input_number.mmw_office_lux_on
             name: Turn on below
-          - entity: input_number.mmw_office_lux_off
-            name: Consider room lit above
+          # CHANGED 2026-09-22: lux_off row removed with the helper - it
+          # controlled nothing (see the package). Replaced by the measured
+          # presence->lamp latency as HA sees it (not R2 itself; see package).
+          - entity: sensor.mmw_office_presence_to_lamp_latency
+            name: Presence to lamp (last, s)
           - entity: input_number.mmw_office_idle_timeout
             name: Idle timeout (total)
           - entity: input_number.mmw_office_cmd_window
