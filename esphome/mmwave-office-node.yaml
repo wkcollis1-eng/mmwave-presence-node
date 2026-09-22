@@ -1,8 +1,11 @@
 # =============================================================================
 # NODE 1 — OFFICE
 # -----------------------------------------------------------------------------
-# This file contains NOTHING but substitutions. All behaviour is in
-# mmwave-node-common.yaml, which both nodes share byte for byte.
+# This file contains NOTHING but substitutions and this node's own API key.
+# All behaviour is in mmwave-node-common.yaml, which both nodes share byte for
+# byte. (The key moved here 2026-09-22: one key per device is the house
+# convention - api_key_mmwave_bench, api_key_ups_monitor, ... - and the shared
+# `api_encryption_key` the common file used would have given both nodes one.)
 #
 # Install geometry (§5.1): sensor at 0.75 m on the desk, seated torso at 1.2 m,
 # target at 1.2 m => 19 deg UP-tilt. Feet under the FRONT edge.
@@ -15,7 +18,7 @@ substitutions:
   friendly: Office mmWave
   room_name: Office
   room_slug: office
-  fw_version: "0.1-draft"
+  fw_version: "0.2-draft"
 
   # Idle timeout, §5.5: office 60-120 s. The ROOM-level total lives in HA as
   # input_number.mmw_office_idle_timeout (default 90 s). This is the MODULE's
@@ -28,6 +31,13 @@ substitutions:
   # gate 3-4 (2.25-3.0 m); do NOT ship these numbers as if they were measured.
   max_move_gate: "4"
   max_still_gate: "4"
+  #
+  # BENCH EVIDENCE, 2026-09-07..22 - NOT YET APPLIED, and deliberately so. The
+  # bench node in this office ran move 2 / still 4: capping MOVE at gate 2 is
+  # what rejected the shared bathroom wall (see the family file's CONTRAST
+  # note). That cap was measured at the BENCH position, not the §5.1 mount, and
+  # the 19 deg up-tilt changes what each gate sees. Re-measure at the mount in
+  # §5.2, then write the result here. Expect move to land at 2, not 4.
 
   gate_log_period: "5"
 
@@ -44,6 +54,10 @@ substitutions:
 
 esphome:
   name: ${node_name}
+
+api:
+  encryption:
+    key: !secret api_key_mmwave_office_node
 
 packages:
   common: !include mmwave-node-common.yaml

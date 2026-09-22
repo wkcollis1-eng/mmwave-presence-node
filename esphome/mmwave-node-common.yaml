@@ -5,6 +5,19 @@
 # Rev 0.1 DRAFT (2026-09-05) — NOT COMPILED. Every component key must be checked
 # against the pinned ESPHome version before first flash (design doc §5.11).
 #
+# Rev 0.2 (2026-09-22) — the 2026-09-07 bench findings ported here, plus the
+# 2026-09-22 review of 14.5 days of bench data and of the ld2410 component
+# source at the ESPHome version the add-on runs (2026.9.0). Every change is
+# dated at its site. In one line each:
+#   * R9 push keyed to the FIRST RADAR FRAME, not the version string (403 s)
+#   * engineering mode RECONCILED toward intent (SPC window OR calibration
+#     hold), replacing the on_time opener and the 30 s closer
+#   * Bluetooth OFF is now part of the pushed commissioned state (R9)
+#   * `Lux stale` and `Presence path disagreement` publish their healthy state
+#     on the first tick instead of sitting at `unknown` until a fault
+#   * a path-skew episode ends on EITHER path's release (65 s artifact, n=1/64)
+#   * API encryption key moved to the per-device files, one key per node
+#
 # ONE firmware, two nodes. Everything room-specific is a substitution set in the
 # per-device file (mmwave-office-node.yaml / mmwave-family-node.yaml), which
 # does nothing but override substitutions and include this file. The compiled
@@ -34,7 +47,7 @@ substitutions:
   friendly: mmWave Node
   room_name: Room
   room_slug: room
-  fw_version: "0.1-draft"
+  fw_version: "0.2-draft"
 
   # ---- room-specific DEFAULTS (overridden per device) ----------------------
   # The values the module boots with the first time. After §5.9 the commissioned
@@ -104,6 +117,12 @@ esphome:
   # 2026.4.3 is Bill's installed version and the floor these configs were
   # validated against; they also pass on 2026.8.2. Raise it deliberately after
   # re-running A1, A2 and A6 — never as a side effect of an upgrade.
+  #
+  # NOTE 2026-09-22: the Device Builder add-on now runs 2026.9.0, and Rev 0.2
+  # was compiled on 2026.9.0 (design doc §8). The floor is deliberately NOT
+  # raised: A1, A2 and A6 have not been re-run on 2026.9.0, and Rev 0.2 has
+  # NOT been compiled on 2026.4.3 - so the floor is now a claim about the
+  # Rev 0.1 text, not this one. Re-run A1/A2/A6, then raise it.
   min_version: 2026.4.3
   project:
     name: "wkcollis1.mmwave-presence-node"
@@ -180,8 +199,11 @@ wifi:
 captive_portal:
 
 api:
-  encryption:
-    key: !secret api_encryption_key
+  # ENCRYPTION KEY IS PER DEVICE — set in mmwave-office-node.yaml /
+  # mmwave-family-node.yaml (moved 2026-09-22). This file used one shared
+  # `api_encryption_key` for both nodes, against the house convention of one
+  # `api_key_<node>` secret per device (basement, battery bank, UPS, bench all
+  # have their own). One leaked key would have exposed both rooms.
   # R7 / §7: HA going down is LOSS OF CONVENIENCE, not a node fault. A node that
   # reboots every 15 min because HA is offline turns one outage into a flapping
   # node and destroys the telemetry that would have explained the outage.
@@ -194,14 +216,15 @@ ota:
 time:
   - platform: homeassistant
     id: ha_time
-    on_time:
-      # ---- daily SPC window, §6.1 — engineering mode ON -------------------
-      - seconds: 0
-        minutes: ${eng_window_minute}
-        hours: ${eng_window_hour}
-        then:
-          - switch.turn_on: eng_mode
-          - logger.log: "SPC window open: engineering mode ON"
+    # ---- daily SPC window, §6.1 — engineering mode ON -------------------
+    # SUPERSEDED 2026-09-22: the window is no longer OPENED here. It was an
+    # on_time trigger firing `switch.turn_on: eng_mode` at
+    # ${eng_window_hour}:${eng_window_minute}:00 and logging "SPC window open:
+    # engineering mode ON". An edge-triggered opener fires once: a node that
+    # boots at 03:12, or a radar that restarts at 03:11 (every R9 push restarts
+    # it - see the script), misses the edge and samples nothing that night.
+    # The ENGINEERING-MODE RECONCILER in `interval:` now owns both halves of
+    # the window. This clock remains its time source.
 
 # -----------------------------------------------------------------------------
 # I2C — light sensor on PH1, off-board on a 150 mm flying-lead cable (§2, §3.2)
@@ -292,6 +315,15 @@ switch:
       id: eng_mode
       # Production default OFF (§6.1). The gate energies exist ONLY while this
       # is on, so this switch IS the telemetry duty cycle.
+      #
+      # `restore_mode` IS INERT ON THIS SWITCH — verified 2026-09-22 against
+      # the ld2410 source at ESPHome 2026.9.0. EngineeringModeSwitch is a
+      # Switch + Parented, not a Component, so nothing ever calls
+      # get_initial_state_with_restore_mode() on it; ld2410.cpp never reads
+      # it either. It is kept only because the schema accepts it. What
+      # actually decides this switch is the RECONCILER in `interval:`.
+      # Its STATE is a genuine readback: ld2410.cpp publishes it from the
+      # frame type of every radar frame (engineering vs basic).
       restore_mode: ALWAYS_OFF
     bluetooth:
       name: "Radar Bluetooth"
@@ -308,6 +340,21 @@ switch:
       # So the power cycle in §5.0 step 0.4 is not merely a persistence CHECK,
       # it is part of the operation. Turn it off, reboot, THEN verify. Without
       # the reboot the radio is still up and the switch says otherwise.
+      #
+      # CORRECTED 2026-09-22 against the ld2410 source at ESPHome 2026.9.0:
+      #   * `restore_mode` IS INERT here, exactly as on engineering mode above -
+      #     BluetoothSwitch is not a Component, so this line never turned
+      #     Bluetooth off at boot. It never did anything. Bluetooth OFF is now
+      #     written by `push_commissioned_state`, which makes it part of the
+      #     commissioned state R9 reproduces after a module swap.
+      #   * set_bluetooth() ALREADY RESTARTS THE MODULE (200 ms after the
+      #     command) and re-reads its config, so pressing `Radar restart`
+      #     afterwards is redundant rather than required.
+      #   * The switch STATE is derived from the MAC query in that re-read
+      #     (non-zero MAC = on). So it is optimistic from the moment it is
+      #     toggled until the re-read lands ~1.2 s later, then a readback -
+      #     which is how it read `off` on the bench while the app was
+      #     connected. The app remains the external witness for step 0.4.
       restore_mode: ALWAYS_OFF
 
   - platform: template
@@ -320,8 +367,11 @@ switch:
       - lambda: "id(g_cal_hold) = true;"
       - switch.turn_on: eng_mode
     turn_off_action:
+      # CHANGED 2026-09-22: this used to `switch.turn_off: eng_mode` as well,
+      # which would close engineering mode even inside the nightly SPC window.
+      # Releasing the hold now only clears the flag; the reconciler turns
+      # engineering mode off within 5 s unless the window still wants it.
       - lambda: "id(g_cal_hold) = false;"
-      - switch.turn_off: eng_mode
 
   - platform: template
     name: "Radar auto-recover"
@@ -350,16 +400,23 @@ text_sensor:
     version:
       name: "Radar firmware"     # §5.0 step 0.3, §5.11
       id: radar_version
-      on_value:
-        # First version string = the UART is locked. Push once, then never
-        # again this boot: the guard matters because query_params below causes
-        # the module to re-report, which would otherwise recurse.
-        - if:
-            condition:
-              lambda: "return !id(g_pushed) && x.length() > 0;"
-            then:
-              - lambda: "id(g_pushed) = true;"
-              - script.execute: push_commissioned_state
+      # SUPERSEDED 2026-09-22 — the R9 push no longer hangs off this sensor.
+      # It was an on_value here:
+      #   First version string = the UART is locked. Push once, then never
+      #   again this boot: the guard matters because query_params below causes
+      #   the module to re-report, which would otherwise recurse.
+      # Two reasons it moved, one measured and one read from source:
+      #   * MEASURED 2026-09-07 on the bench: the version populated 403 s after
+      #     boot, so production ran on whatever NVM held for ~6.7 min per boot.
+      #   * SOURCE, ld2410.cpp at 2026.9.0: the version is requested ONLY by
+      #     read_all_info(), which runs at setup() and after a module restart,
+      #     and NOTHING retries it. If the module is still booting when the ESP
+      #     sends that first request, the version may not arrive until some
+      #     later restart - and in production nothing else restarts the module,
+      #     so the push could wait indefinitely.
+      # The push now keys on the first radar DATA frame (see the interval).
+      # The push itself restarts the module, which re-reads the version, so
+      # this sensor populates within seconds of the push as a side effect.
     mac_address:
       name: "Radar MAC"
   - platform: debug
@@ -380,6 +437,16 @@ binary_sensor:
               id(path_skew).publish_state(
                 (float)((int32_t)id(g_uart_edge_ms) - (int32_t)id(g_out_edge_ms)));
             }
+      # ADDED 2026-09-22 — end the skew episode on EITHER path's release.
+      # Only the OUT path cleared the edges. When the UART dropped and
+      # re-rose inside OUT's 2 s delayed_off, the second UART press was timed
+      # against the ORIGINAL OUT edge: one published skew of 65,156 ms among
+      # 64 readings whose median is 2 ms (bench, 2026-09-08..22). The median
+      # survives one outlier; §6.3's drift alarm on the skew would not.
+      on_release:
+        - lambda: |-
+            id(g_out_edge_ms) = 0;
+            id(g_uart_edge_ms) = 0;
     has_moving_target:
       name: "Moving target"
       id: moving_target
@@ -830,6 +897,21 @@ select:
 # "opaque values in device NVM, not diffable, don't survive a module swap"
 # failure that §5.3a rejects auto-calibration for.
 script:
+  # ADDED 2026-09-22 — what this script does to the MODULE, read from
+  # esphome/components/ld2410/ld2410.cpp at 2026.9.0 [S]:
+  #   * n_timeout, n_max_move and n_max_still each call
+  #     set_max_distances_timeout(), which returns EARLY unless all three
+  #     numbers already hold a state, and otherwise schedules
+  #     set_timeout(200, restart_and_read_all_info). So a push RESTARTS the
+  #     radar - up to three times, 200 ms after the chain, plus once more for
+  #     the Bluetooth write below. A restart drops engineering mode; the
+  #     reconciler in `interval:` puts it back.
+  #   * set_gate_threshold() returns early unless BOTH the move and still
+  #     number for that gate hold a state.
+  # So the ORDER below is load-bearing whenever setup()'s one-shot
+  # read_all_info() failed and nothing has a state yet: timeout -> max_move ->
+  # max_still (the third call is the one that sends), and move -> still for
+  # each gate (the still write is the one that sends). Do not reorder.
   - id: push_commissioned_state
     mode: single
     then:
@@ -896,6 +978,13 @@ script:
       - number.set:
           id: n_g8_still
           value: ${g8_still}
+      # ADDED 2026-09-22 — Bluetooth OFF is part of the commissioned state
+      # (§5.0 step 0.4). `restore_mode` on this switch is inert (see the switch
+      # block), so without this line a module shipped with BT on stays on.
+      # Written unconditionally: the switch state is derived from the MAC
+      # query, which can fail the same way the version query did, and one
+      # extra module restart per boot is the price of not trusting it.
+      - switch.turn_off: radar_bt
       - logger.log: "R9: commissioned thresholds pushed from YAML into module NVM"
       - button.press: radar_query          # read them back so HA shows the truth
 
@@ -903,34 +992,79 @@ script:
 # INTERVALS
 # -----------------------------------------------------------------------------
 interval:
-  # ---- close the daily SPC window, §6.1 -----------------------------------
-  # Done here rather than as a second on_time, because the close time is
-  # start + duration and computing that in a cron expression across an hour
-  # boundary is a bug waiting to happen. This checks a wall-clock condition
-  # instead, which is correct at midnight, across DST, and after a reboot
-  # mid-window.
-  - interval: 30s
+  # ---- ENGINEERING-MODE RECONCILER, §6.1 + calibration hold ----------------
+  # (was: "close the daily SPC window") Done here rather than as a second
+  # on_time, because the close time is start + duration and computing that in
+  # a cron expression across an hour boundary is a bug waiting to happen. This
+  # checks a wall-clock condition instead, which is correct at midnight, across
+  # DST, and after a reboot mid-window.
+  #
+  # SUPERSEDED 2026-09-22: this interval used to only CLOSE the window (30 s,
+  # `elapsed >= 10 && elapsed < 60`); an on_time under `time:` opened it. It
+  # now owns BOTH halves, as a desired-state reconciler: every 5 s it computes
+  # want = (inside the 10 min window) OR (calibration hold), and drives the
+  # switch toward it. Why, all from the bench (2026-09-08..22) and the source:
+  #   * An open that fires once is lost to the next module restart. Any
+  #     timeout/max-gate write restarts the radar [S, ld2410.cpp
+  #     set_max_distances_timeout], and a restart drops engineering mode.
+  #     The bench keeper saw 123 forced-off events and restored them at a
+  #     median 3.3 s, P95 10.3 s [M] - the same reconcile, proven.
+  #   * A reboot inside the window used to miss the open entirely.
+  #   * Releasing the calibration hold inside the window used to close it.
+  # The midnight wrap of `elapsed` was verified on the bench 2026-09-22
+  # 00:00-00:49 [M]; the OPEN half was never exercised there - on this node it
+  # is new code, and first-night observation is in the design doc §8.
+  - interval: 5s
     then:
-      - if:
-          condition:
-            and:
-              - switch.is_on: eng_mode
-              - lambda: "return !id(g_cal_hold);"
-              - lambda: |-
-                  auto t = id(ha_time).now();
-                  if (!t.is_valid()) return false;
-                  int now_min   = t.hour * 60 + t.minute;
-                  int start_min = ${eng_window_hour} * 60 + ${eng_window_minute};
-                  int elapsed   = (now_min - start_min + 1440) % 1440;
-                  return elapsed >= 10 && elapsed < 60;   // 10 min window
-          then:
-            - switch.turn_off: eng_mode
-            - logger.log: "SPC window closed: engineering mode OFF"
+      - lambda: |-
+          static uint32_t attempts = 0;
+          bool want = id(g_cal_hold);
+          auto t = id(ha_time).now();
+          if (t.is_valid()) {
+            int now_min   = t.hour * 60 + t.minute;
+            int start_min = ${eng_window_hour} * 60 + ${eng_window_minute};
+            int elapsed   = (now_min - start_min + 1440) % 1440;
+            if (elapsed < 10) want = true;                // 10 min window
+          }
+          if (want == id(eng_mode).state) { attempts = 0; return; }
+          // Log the first attempt and then once a minute: with a dead UART the
+          // frame readback never agrees, and this would otherwise log every 5 s.
+          if (attempts++ % 12 == 0)
+            ESP_LOGI("mmwave", "engineering mode -> %s (window/hold), attempt %u",
+                     want ? "ON" : "OFF", (unsigned) attempts);
+          if (want) id(eng_mode).turn_on(); else id(eng_mode).turn_off();
+
+  # ---- R9 PUSH TRIGGER: first radar DATA frame + 5 s -----------------------
+  # ADDED 2026-09-22, replacing the version-string trigger (see text_sensor).
+  # has_target publishes on EVERY data frame [S, ld2410.cpp], so has_state()
+  # going true is "the UART is locked and the module is reporting". The 5 s
+  # settle lets setup()'s read_all_info() finish before the push restarts the
+  # module under it. g_pushed makes it once per boot.
+  - interval: 5s
+    then:
+      - lambda: |-
+          static uint32_t first_frame_ms = 0;
+          if (id(g_pushed)) return;
+          if (!id(presence_uart).has_state()) return;
+          if (first_frame_ms == 0) { first_frame_ms = millis(); return; }
+          if (millis() - first_frame_ms < 5000) return;
+          id(g_pushed) = true;
+          ESP_LOGI("mmwave", "first radar frame %u ms after boot; pushing commissioned state",
+                   (unsigned) first_frame_ms);
+          id(push_commissioned_state).execute();
 
   # ---- two-path cross-check, §6.2 -----------------------------------------
   - interval: 1s
     then:
       - lambda: |-
+          // ADDED 2026-09-22: no verdict until BOTH paths have reported, and
+          // publish an explicit `false` once. Before this the entity sat at
+          // `unknown` in HA until the first disagreement - an absent finding
+          // that looked like a clean one (R8) - and a boot before the first
+          // radar frame counted towards the 300 s as a disagreement.
+          static bool armed = false;
+          if (!id(presence_uart).has_state() || !id(presence_out).has_state()) return;
+          if (!armed) { id(path_disagree).publish_state(false); armed = true; }
           bool a = id(presence_uart).state;
           bool b = id(presence_out).state;
           if (a != b) {
@@ -966,5 +1100,16 @@ interval:
   - interval: 60s
     then:
       - lambda: |-
+          // CHANGED 2026-09-22: publish on the first tick as well as on change.
+          // A template binary_sensor starts with state=false and NO state, so
+          // `stale != state` was false for a healthy sensor and nothing was
+          // ever published: lux_stale read `unknown` in HA for the node's whole
+          // life. The package's `is_state(..., 'off')` condition then blocked
+          // every lamp-on - a BLOCKING defect found in review, not on the bench
+          // (the bench node computed its lamp logic on-device).
+          static bool published = false;
           bool stale = (millis() - id(g_last_lux_ms)) > 3600000UL;  // 1 h
-          if (stale != id(lux_stale).state) id(lux_stale).publish_state(stale);
+          if (!published || stale != id(lux_stale).state) {
+            id(lux_stale).publish_state(stale);
+            published = true;
+          }
