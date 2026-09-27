@@ -603,6 +603,23 @@ sensor:
     # sets E_clutter; dropping them biases every percentile upward and silently
     # invalidates the calibration. Throttle samples uniformly in time, which is
     # what a quantile estimate requires.
+    #
+    # R13 CORRECTION, 2026-09-26 (Rev 0.3): the sentence above was FALSE for
+    # this component. ESPHome's LD2410 driver publishes a gate only when its
+    # raw value CHANGES (esphome 2026.9.0 ld24xx.h: SAFE_PUBLISH_SENSOR ->
+    # publish_state_if_not_dup), so the throttle saw change events, not a
+    # clock. A gate that jumped and then HELD - pinned at 100 under a seated
+    # person - lost the jump whenever it landed within one period of the last
+    # pass, and HA kept the old value until the gate next changed. Office node,
+    # first labelled hour: still g2/g3/g5 spent 12-18% of the time held >30 s
+    # below 100, every move gate 0% [M, 2953 s eng-on]. The mechanism is [S];
+    # whether any one hold was stale is [I]. The `heartbeat` below re-emits the
+    # latest raw value every second whatever it is, so the throttle after it
+    # always has a fresh input: nothing HA holds is older than period + 1 s.
+    # Side effect: with engineering mode off the driver publishes unknown once
+    # per gate; the old throttle usually dropped that (which is why the gates
+    # HELD their last value), the heartbeat carries it, so the gates now read
+    # unknown outside engineering mode [I until observed].
     g0:
       move_energy:
         name: "G0 move"
@@ -615,6 +632,10 @@ sensor:
           # `return {}` means "do not publish", so a dropped sample costs
           # nothing downstream. The static is per-filter-instance, so each of
           # the 18 series throttles independently, which is what we want.
+          # Rev 0.3: a clock ahead of the throttle - see the R13 CORRECTION
+          # above. 1 s because gate_period steps in whole seconds (min 1), so
+          # every period it can hold is a whole number of heartbeats.
+          - heartbeat: 1s
           - lambda: |-
               static uint32_t last_pub = 0;
               uint32_t t = millis();
@@ -624,7 +645,11 @@ sensor:
               // the recorder or publishes nothing at all.
               if (!std::isfinite(p) || p < 1.0f) p = 5.0f;
               uint32_t period = (uint32_t)(p * 1000.0f);
-              if (last_pub != 0 && (t - last_pub) < period) return {};
+              // Rev 0.3: up to 500 ms early still counts as due. Input now
+              // arrives on a 1 s heartbeat, so a strict < would drop a tick
+              // landing a millisecond short and stretch 5 s to 6 s - and the
+              // analysis counts snapshots by this period (n_snap).
+              if (last_pub != 0 && (t - last_pub) + 500 < period) return {};
               last_pub = t;
               return x;
       still_energy:
