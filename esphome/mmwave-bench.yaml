@@ -7,6 +7,17 @@
 # mmwave-node-common.yaml, so nothing you do here can break the production
 # config, and the production config cannot break your bench rig.
 #
+# AMENDED 2026-09-25 (Rev 0.1.1): this rig is now the ASSEMBLED OFFICE CARRIER
+# (same radar module as the jumper rig) and the VEML7700 on PH1 is live. Four
+# blocks are PASTED, not included, VERBATIM from mmwave-node-common.yaml: the
+# `i2c:` bus, the `veml7700` sensor, `Lux age`, and the `g_last_lux_ms` global.
+# Verbatim so that §5.0 step 0.6 tests the exact config production ships.
+# THEY ARE A TEMPORARY SECOND COPY (R10). Delete them when this node moves to
+# production firmware; if the common file's copy changes first, re-paste it,
+# never edit it here. MEASUREMENT ONLY: the on-node lamp logic below still
+# gates on the module photodiode and never reads `lux`. The package warning
+# below still stands - a light sensor does not make this node a room.
+#
 # It is also deliberately NOT the production firmware with bits removed:
 #   * engineering mode is ON at boot — the 18 gate energies are the whole point
 #     of a bench session, and in production they are off by default (§6.1)
@@ -142,6 +153,26 @@
 #        (protocol V1.07 §2.2.12), not just a way to test persistence. BT is ON
 #        from the factory, and its config password is the default "HiLink".
 #   0.5  `Engineering mode` is already on. Confirm 18 gate series appear.
+#   0.6  (ADDED 2026-09-25, VEML7700 fitted) In the config dump `esphome logs`
+#        prints on connect, the i2c scan lists `Found device at address 0x10`
+#        and the veml7700 block has no `Communication failed`. CORRECTED
+#        2026-09-25, before flashing: this first said "no `Sensor configuration
+#        failed`", but setup() logs that before any API log client connects,
+#        so its absence proved nothing (veml7700.cpp:83; the dump line is
+#        :113-114). Cover the sensor
+#        completely: `Ambient light` ~0 lx, and auto_mode walks `Lux gain` to 2x
+#        and `Lux integration time` to 800 ms (ESPHome 2026.9.0 veml7700.cpp,
+#        are_adjustments_required_: <=100 counts steps gain up, then time).
+#        A torch drives both back down. Then compare against the basement node
+#        twice - lid OFF (sensor agreement), lid CLOSED (the enclosure) - at
+#        2-3 light levels including dim light near ~18 lx (§5.6). A ratio that
+#        is constant across levels is the multiplier `glass_attenuation_factor`
+#        expects; one that grows as light falls is an additive leak (the LED,
+#        or light getting in). FAULT TEST: unplug at the keyed JST-SH end, never
+#        at PH1. Mid-run: warnings, then readings resume on replug with no
+#        reboot. Boot unplugged: setup() calls mark_failed() and never retries,
+#        so `Lux age` climbs from boot until the node is restarted, and the
+#        config dump shows `Communication failed`.
 #   0.7  Wave a hand at 0.5 m — `Moving target` toggles.
 #   0.8  Confirm `Presence (hardware OUT)` agrees with `Presence (UART)`.
 #        Watch `Presence path skew` — that is the two paths cross-checking
@@ -152,6 +183,8 @@
 #
 # Steps 0.6, 0.10–0.12 need the light sensor, the lid and the enclosure. Not
 # this session.
+# AMENDED 2026-09-25: the assembly is done, so all four are possible now; 0.6
+# is written out above.
 #
 # =============================================================================
 # FIRST FLASH IS OVER USB. Plug the XIAO in, then:
@@ -326,7 +359,7 @@ esphome:
   min_version: 2026.4.3
   project:
     name: "wkcollis1.mmwave-bench"
-    version: "0.1"
+    version: "0.1.1"    # 0.1.1 (2026-09-25): + VEML7700 on PH1
   on_boot:
     priority: -100
     then:
@@ -405,6 +438,27 @@ api:
 ota:
   - platform: esphome
     password: !secret ota_password
+
+# PASTED VERBATIM from mmwave-node-common.yaml, 2026-09-25 - see the header.
+# -----------------------------------------------------------------------------
+# I2C — light sensor on PH1, off-board on a 150 mm flying-lead cable (§2, §3.2)
+# -----------------------------------------------------------------------------
+# !! BUILD CONSTRAINT — READ BEFORE PLUGGING ANYTHING IN !!
+#   PH1 is COLOUR-CODED, NOT Qwiic PIN-ORDERED. The pad order was chosen for
+#   routing; the silkscreen colours are the interface.
+#       pad 1 = 3V3  RED      pad 2 = GND  BLACK
+#       pad 3 = SCL  YELLOW   pad 4 = SDA  BLUE
+#   Use ONLY a flying-lead cable with four independent female sockets —
+#   Adafruit 4397. A MOLDED 4-PIN HOUSING CABLE CONNECTS POWER BACKWARDS AND
+#   DESTROYS THE VEML7700. The board tells you the colours but not why, and this
+#   config gets read first — which is the whole reason the warning is here.
+# -----------------------------------------------------------------------------
+i2c:
+  sda: GPIO6            # D4 — PH1 pad 4, BLUE
+  scl: GPIO7            # D5 — PH1 pad 3, YELLOW
+  frequency: 100000     # 400 kHz buys nothing at a 10 s poll
+  scan: true
+  timeout: 50ms
 
 uart:
   id: uart_radar
@@ -491,6 +545,15 @@ globals:
     type: bool
     restore_value: false
     initial_value: 'false'
+  # PASTED VERBATIM from mmwave-node-common.yaml, 2026-09-25 - see the header.
+  # Lux staleness, §7: "if lux unavailable >1 h, hold the last valid value and
+  # alert". ESPHome already holds the last value by not publishing; what was
+  # missing is the alert, and a way for the lighting automation to REFUSE to act
+  # on an hour-old reading.
+  - id: g_last_lux_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: '0'
 
 # -----------------------------------------------------------------------------
 switch:
@@ -1088,6 +1151,78 @@ sensor:
     name: "Uptime"
   - platform: internal_temperature
     name: "Node temperature"
+
+  # PASTED VERBATIM from mmwave-node-common.yaml, 2026-09-25 - see the header.
+  # ---- light ---------------------------------------------------------------
+  - platform: veml7700
+    address: 0x10        # confirmed, Adafruit guide p.24 "default I2C address 0x10"
+    update_interval: 10s
+    # !! CUT THE POWER-LED JUMPER ON THE BACK OF THE 4162 BEFORE ASSEMBLY !!
+    # The breakout carries a green power LED that is lit whenever the board is
+    # powered, on the same face as the photodiode, and this whole assembly goes
+    # into a SEALED BOX. An ambient-light sensor shut in a dark enclosure with
+    # its own light source is measuring its own LED.
+    # It matters because of WHERE the threshold sits: §5.6 sets THRESHOLD_ON at
+    # ~18 lx and the part resolves 0.0036 lx/count, so a stray offset of even a
+    # lux or two is a large fraction of the decision. Worse, it is a CONSTANT
+    # offset — it looks like a calibration, not a fault, and it would be
+    # silently baked into the commissioned threshold.
+    # Adafruit put the jumper there for exactly this case (guide p.7).
+    # DEPARTURE FROM §4.1: the ESPHome key is `ambient_light`, not `lux`.
+    # Calibrated lux is the whole reason this part was chosen over a
+    # phototransistor — the ~18 lx threshold transfers across nodes and across a
+    # sensor swap (§5.6). Verify the key against the pinned version at §5.11.
+    ambient_light:
+      name: "Ambient light"
+      id: lux
+      accuracy_decimals: 1
+      on_value:
+        - lambda: "id(g_last_lux_ms) = millis();"
+    actual_gain:
+      name: "Lux gain"
+      entity_category: diagnostic
+    actual_integration_time:
+      name: "Lux integration time"
+      entity_category: diagnostic
+    # auto_mode ranges gain and integration time so one part covers a dark room
+    # and a sunlit one without saturating. The two diagnostic sensors above
+    # exist so a suspicious lux reading can be checked against the range the
+    # part was actually in when it made it.
+    auto_mode: true
+
+    # GLASS ATTENUATION — THE SENSOR IS INSIDE A BOX, AND §5.6 DEPENDS ON IT
+    # READING ROOM LUX.
+    # The whole case for the VEML7700 over a phototransistor is that ~18 lx
+    # means the same thing on every node and survives a sensor swap (§5.6).
+    # That argument quietly assumes the number is ROOM lux. This part sits
+    # behind an enclosure wall, so what it reports is room lux times the wall's
+    # transmission — and an uncorrected reading is portable only between nodes
+    # in identical boxes, which is a much weaker claim than the one the design
+    # rests on.
+    #
+    # ESPHome applies this as a MULTIPLIER on als_lux
+    # (`veml7700.cpp: apply_glass_attenuation_`), which is the physically right
+    # form: attenuation scales, it does not offset. An additive trim — which is
+    # what a "lux offset" number entity would give — is the wrong shape and
+    # would only be correct at one light level.
+    #
+    # MEASURE IT AT §5.0 STEP 0.6, which already exists for exactly this
+    # comparison: put the assembled node and the basement node under the same
+    # light, and set
+    #     glass_attenuation_factor = lux_reference / lux_in_box
+    # 1.0 is "no correction" and is a placeholder, not a measurement. Record the
+    # measured value in the §5.8 baseline — it is part of the commissioned
+    # state, and a lid change invalidates it.
+    glass_attenuation_factor: 1.0
+
+  - platform: template
+    name: "Lux age"
+    id: lux_age
+    unit_of_measurement: "s"
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    lambda: "return (millis() - id(g_last_lux_ms)) / 1000.0f;"
+    update_interval: 60s
 
 # -----------------------------------------------------------------------------
 # NUMBERS — the tuning surface. Change one, watch presence change. That is the
