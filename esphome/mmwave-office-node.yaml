@@ -1,7 +1,8 @@
 # =============================================================================
 # NODE 1 — OFFICE
 # -----------------------------------------------------------------------------
-# This file contains NOTHING but substitutions and this node's own API key.
+# This file contains NOTHING but substitutions, this node's own API key, and
+# the address the tooling uses to reach it (wifi: use_address, 2026-09-25).
 # All behaviour is in mmwave-node-common.yaml, which both nodes share byte for
 # byte. (The key moved here 2026-09-22: one key per device is the house
 # convention - api_key_mmwave_bench, api_key_ups_monitor, ... - and the shared
@@ -58,6 +59,19 @@ esphome:
 api:
   encryption:
     key: !secret api_key_mmwave_office_node
+
+wifi:
+  # Where the TOOLING finds this device. The Device Builder add-on runs in a
+  # container with no mDNS resolver, so the default <name>.local never resolves
+  # there - the bench file's use_address comment has the history. Per device,
+  # so it lives here and not in the common file. 10.0.0.57 is the address HA's
+  # config entry for this MAC (ac:27:6e:81:e7:f0) connects to [M:
+  # core.config_entries, 2026-09-25]. The dashboard reads it from this YAML to
+  # reach the device. It IS compiled in, but only as the "Address:" line of the
+  # API and OTA config dumps [S: generated api_server.cpp:276 and
+  # ota_esphome.cpp:121, ESPHome 2026.9.0] - it changes nothing the device
+  # does. Pair with a DHCP reservation, or this goes stale when the lease moves.
+  use_address: 10.0.0.57
 
 packages:
   common: !include mmwave-node-common.yaml
