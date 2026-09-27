@@ -47,73 +47,9 @@ badges:
 
 sections:
   # ---------------------------------------------------------------------------
-  - type: grid
-    column_span: 2
-    cards:
-      - type: markdown
-        text_only: true
-        content: "### What is happening now"
-
-      - type: horizontal-stack
-        cards:
-          - type: button
-            name: Sitting at desk
-            icon: mdi:desk
-            icon_height: 56px
-            show_state: false
-            tap_action:
-              action: perform-action
-              perform_action: input_select.select_option
-              target:
-                entity_id: input_select.mmw_office_label
-              data:
-                option: sitting at desk
-          - type: button
-            name: Moving in office
-            icon: mdi:walk
-            icon_height: 56px
-            tap_action:
-              action: perform-action
-              perform_action: input_select.select_option
-              target:
-                entity_id: input_select.mmw_office_label
-              data:
-                option: moving in office
-
-      - type: horizontal-stack
-        cards:
-          - type: button
-            name: Entering office
-            icon: mdi:door-open
-            icon_height: 56px
-            tap_action:
-              action: perform-action
-              perform_action: input_select.select_option
-              target:
-                entity_id: input_select.mmw_office_label
-              data:
-                option: entering office
-          - type: button
-            name: No one present
-            icon: mdi:account-off
-            icon_height: 56px
-            tap_action:
-              action: perform-action
-              perform_action: input_select.select_option
-              target:
-                entity_id: input_select.mmw_office_label
-              data:
-                option: no one present
-
-      - type: entities
-        title: Current label
-        entities:
-          - entity: input_select.mmw_office_label
-            name: Label (dropdown fallback)
-          - entity: sensor.mmw_office_cal_class
-            name: Recorded class
-          - entity: switch.office_mmwave_calibration_hold
-            name: Calibration hold (keeps eng mode on)
+  # The label buttons live in grid-mmwave-office-label.yaml, shared with the
+  # buttons-only Label tab (view-mmwave-office-label.yaml). Edit them there.
+  - !include grid-mmwave-office-label.yaml
 
   # ---------------------------------------------------------------------------
   - type: grid

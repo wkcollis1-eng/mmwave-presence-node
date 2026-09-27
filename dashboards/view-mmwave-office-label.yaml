@@ -1,0 +1,21 @@
+# =============================================================================
+# DASHBOARD VIEW — Office mmWave, Label tab (buttons only)
+# Added 2026-09-26 as a test of the phone lag Bill reported on the label buttons.
+# -----------------------------------------------------------------------------
+# The server was measured first [M, 2026-09-26 14:01Z, 60 s window]: websocket
+# ping median 0.5 ms (n=20), REST median 2.5 ms (n=10), host CPU 17%. The phone
+# (iOS app) was on the LAN. So the delay is on the phone. Suspect [I]: the main
+# tab redrawing its three history graphs (14 series, 2-6 h) as the office node
+# sends 6.2 state changes a second [M, same window].
+#
+# This tab holds the same label grid - the same file, !included - and no
+# graphs. FALSIFIER: if taps lag here as much as on the main tab, the graphs are
+# not the cause; look at the app or the phone instead.
+# =============================================================================
+type: sections
+max_columns: 2
+icon: mdi:gesture-tap-button
+path: mmwave-office-label
+title: Label
+sections:
+  - !include grid-mmwave-office-label.yaml
