@@ -5,6 +5,20 @@ mmwave_calibrate.py — derive LD2410C gate thresholds from labelled HA data.
 Design doc: mmwave-presence-node-design.md Rev 1.4, sections 5.3 and 5.9.
 Closes open item 8 ("write the §5.9 analysis script and commit it with the
 config"). Rev 0.1 DRAFT 2026-09-05 — NOT RUN AGAINST REAL DATA.
+Rev 0.2 2026-09-26 — time-weighted. Proven on synthetic data only.
+Rev 0.3 2026-09-26 — settle window after each label change; a gate whose L(T)
+exceeds its budget is no longer reported OK. Proven on synthetic data only.
+
+R13 RECORD, 2026-09-26: Rev 0.1 computed every statistic over recorder ROWS.
+The recorder writes a row only when a state CHANGES, so a gate holding one
+value for a minute gave one row and a gate flickering between two values gave
+twelve: the percentiles were weighted by how often a value changed, not by how
+long it held. On the office node's first labelled desk run (534 s,
+2026-09-26) g5_still's median was 46 by row and 98 by time [M]. The same
+defect under-read L(T) (a value held longer than max_gap_s broke the run),
+made the collection-B blower fraction a fraction of LABEL CHANGES, and gave
+the label still in force when the database was copied zero minutes. Rev 0.2
+reads every series as the step function it is, on one grid (resample()).
 
 WHAT THIS DOES, and why it is a script rather than a query
 -----------------------------------------------------------------------------
@@ -95,6 +109,30 @@ ENTITY_PREFIX = {"office": "office_mmwave", "family": "family_mmwave"}
 N_GATES = 9
 GATE_DEPTH_M = 0.75  # Appendix A; protocol V1.07 Table 8, factory default
 
+# RESAMPLING (Rev 0.2). Every series is sampled on one 1 s grid. 1 s rather
+# than the gate log period because that period is runtime-adjustable (5 s for
+# the passive collection, 1 s for focused seat runs) and a mixed collection
+# needs a single grid.
+GRID_S = 1.0
+# Used only where number.<prefix>_gate_log_period has no history: the
+# `gate_log_period` substitution in esphome/mmwave-node-common.yaml. The report
+# says how much live data it was assumed for.
+DEFAULT_GATE_PERIOD_S = 5.0
+# Counts are SNAPSHOTS - grid seconds divided by the publish period in force -
+# not grid points: a 5 s value read five times on a 1 s grid is still one
+# observation, and 1/n below is only honest if n counts observations.
+MIN_SNAPSHOTS = 100
+
+# SETTLE WINDOW (Rev 0.3). A label is pressed from inside the room, so the
+# seconds after each change still hold the transition it announces: whoever
+# pressed "no one present" is walking out. Office node, 2026-09-26: in the
+# first 10 s after each of the 2 empty labels, max(g2-g5 still) read 99 and 98,
+# and by 10 s it was <= 14 [M, n=2 segments, 5 s snapshots]. With a few hundred
+# empty snapshots P99.5 IS the maximum, so those seconds set E_clutter on their
+# own. 15 s = the 10 s observed + one 5 s period of margin [D]. n=2 is thin:
+# re-measure on the heartbeat firmware and change this number, not the data.
+DEFAULT_SETTLE_S = 15.0
+
 # STATIC SENSITIVITY IS INERT ON GATES 0 AND 1.
 # Protocol V1.07 Table 7 marks both "-(not settable)" — 0-1.5 m is too close for
 # the module to threshold statically. Deriving a value would produce a number
@@ -128,7 +166,7 @@ DEFAULT_IDLE_TIMEOUT = {"office": 90, "family": 300}
 # the EMPTY median in that gate. Comparing against the empty P99.5 instead (the
 # obvious first attempt) silently reclassifies a shadowed seat as an unoccupied
 # gate — which converts §5.9.4's stop condition into a shrug.
-OCCUPANCY_LIFT = 3.0   # energy counts above the empty-room median
+OCCUPANCY_LIFT = 3.0  # energy counts above the empty-room median
 
 # §5.9.4 margin bands.
 SM_COMFORTABLE = 2.0
@@ -138,6 +176,7 @@ SM_UNUSABLE = 1.0
 # =============================================================================
 # Recorder access
 # =============================================================================
+
 
 def load_series(db_path: str, entity_ids: list[str]) -> dict[str, tuple]:
     """Return {entity_id: (timestamps float64, states object array)}.
@@ -205,8 +244,9 @@ def to_float(states: np.ndarray) -> np.ndarray:
     return vals
 
 
-def step_lookup(class_ts: np.ndarray, class_val: np.ndarray,
-                query_ts: np.ndarray) -> np.ndarray:
+def step_lookup(
+    class_ts: np.ndarray, class_val: np.ndarray, query_ts: np.ndarray
+) -> np.ndarray:
     """The class in force at each query time.
 
     A label is a step function: it holds from the moment it is set until it is
@@ -227,9 +267,29 @@ def step_lookup(class_ts: np.ndarray, class_val: np.ndarray,
     return out
 
 
+def resample(ts: np.ndarray, vals: np.ndarray, grid: np.ndarray) -> np.ndarray:
+    """The value in force at each grid time; NaN before the first row.
+
+    ADDED 2026-09-26 (Rev 0.2). A recorder row is not a sample: it is the start
+    of an interval of unknown length, written only because the state changed.
+    Reading the value in force at each grid instant turns rows back into a time
+    series, so every statistic downstream is weighted by time. It is the same
+    instantaneous read step_lookup() does for labels, not a binning, so that
+    docstring's point about samples either side of a label change still holds.
+    """
+    out = np.full(grid.shape, np.nan, dtype="float64")
+    if ts.size == 0:
+        return out
+    idx = np.searchsorted(ts, grid, side="right") - 1
+    ok = idx >= 0
+    out[ok] = vals[idx[ok]]
+    return out
+
+
 # =============================================================================
 # Statistics
 # =============================================================================
+
 
 def pct(x: np.ndarray, q: float) -> float:
     """Percentile with linear interpolation, NaN-safe. Empty -> NaN."""
@@ -237,8 +297,9 @@ def pct(x: np.ndarray, q: float) -> float:
     return float(np.percentile(x, q)) if x.size else float("nan")
 
 
-def longest_run_below(ts: np.ndarray, vals: np.ndarray, thresh: float,
-                      max_gap_s: float = 5.0) -> float:
+def longest_run_below(
+    ts: np.ndarray, vals: np.ndarray, thresh: float, max_gap_s: float = 5.0
+) -> float:
     """L(T): longest continuous interval, in seconds, with value < T.
 
     §5.9.3. This is the metric that matches R1, and P5 is not: P5 says 5% of
@@ -250,6 +311,12 @@ def longest_run_below(ts: np.ndarray, vals: np.ndarray, thresh: float,
     that closed, a reboot, a Wi-Fi stall. Without it a 6-hour hole between two
     below-threshold samples reads as a 6-hour dropout, and the whole gate gets
     condemned on the strength of a missing cable.
+
+    On the Rev 0.2 grid a gap is a masked stretch (engineering mode off, sensor
+    unavailable, another label). Rev 0.1 fed this recorder rows, so a value
+    merely HELD for more than max_gap_s also broke the run - and a dropout that
+    sat at one value for a minute read as a 0 s run. That is the direction that
+    passes a gate it should fail.
     """
     if ts.size == 0:
         return 0.0
@@ -259,7 +326,7 @@ def longest_run_below(ts: np.ndarray, vals: np.ndarray, thresh: float,
     in_run = False
     for t, b in zip(ts, below):
         if prev_t is not None and (t - prev_t) > max_gap_s:
-            in_run = False          # sampling gap: the run cannot be verified
+            in_run = False  # sampling gap: the run cannot be verified
         if b:
             if not in_run:
                 in_run, cur_start = True, t
@@ -270,8 +337,9 @@ def longest_run_below(ts: np.ndarray, vals: np.ndarray, thresh: float,
     return float(longest)
 
 
-def autocorr_report(ts: np.ndarray, vals: np.ndarray,
-                    max_lag_s: int = 120) -> tuple[float, float, int]:
+def autocorr_report(
+    ts: np.ndarray, vals: np.ndarray, max_lag_s: int = 120
+) -> tuple[float, float, int]:
     """(decorrelation lag s, effective N, raw N) for one labelled run.
 
     §5.3 withdrew the earlier "N=150 from an assumed 4 s decorrelation" claim
@@ -296,7 +364,7 @@ def autocorr_report(ts: np.ndarray, vals: np.ndarray,
 
     x = x - x.mean()
     denom = float(np.dot(x, x))
-    if denom == 0:                       # a gate pinned at one value
+    if denom == 0:  # a gate pinned at one value
         return 0.0, float(n), n
 
     max_lag = min(int(max_lag_s / dt), n // 4)
@@ -317,7 +385,7 @@ def autocorr_report(ts: np.ndarray, vals: np.ndarray,
 @dataclass
 class GateResult:
     gate: int
-    channel: str                  # "move" or "still"
+    channel: str  # "move" or "still"
     e_clutter: float = float("nan")
     e_signal: float = float("nan")
     t0: float = float("nan")
@@ -336,18 +404,28 @@ class GateResult:
     notes: list[str] = field(default_factory=list)
 
 
-def sweep(clutter: np.ndarray, signal: np.ndarray,
-          sig_ts: np.ndarray, fpr_target: float,
-          l_limit: float) -> tuple[float, float, float, float, list[str]]:
+def sweep(
+    clutter: np.ndarray,
+    signal: np.ndarray,
+    sig_ts: np.ndarray,
+    fpr_target: float,
+    l_limit: float,
+) -> tuple[float, float, float, float, list[str]]:
     """§5.9.2. Returns (T, FPR, FNR, L(T), notes)."""
     notes: list[str] = []
     clutter = clutter[~np.isnan(clutter)]
     signal_clean = signal[~np.isnan(signal)]
     if clutter.size == 0 or signal_clean.size == 0:
-        return float("nan"), float("nan"), float("nan"), float("nan"), \
-            ["no data in one of the two classes"]
+        return (
+            float("nan"),
+            float("nan"),
+            float("nan"),
+            float("nan"),
+            ["no data in one of the two classes"],
+        )
 
     best = None
+    over = 0
     for t in range(0, 101):
         fpr = float((clutter > t).mean())
         fnr = float((signal_clean < t).mean())
@@ -355,11 +433,19 @@ def sweep(clutter: np.ndarray, signal: np.ndarray,
             lt = longest_run_below(sig_ts, signal, float(t))
             if lt < l_limit:
                 best = (float(t), fpr, fnr, lt)
-                break        # lowest T that holds: the selection rule
-            notes.append(
-                f"T={t} met the FPR target but L(T)={lt:.0f}s exceeds the "
-                f"{l_limit:.0f}s budget; kept searching upward"
-            )
+                break  # lowest T that holds: the selection rule
+            # Rev 0.3: one note, not one per T. L(T) cannot fall as T rises
+            # (more samples sit below a higher T), so every T above this one
+            # fails too; the per-T notes were ~60 identical lines once the
+            # L(T) verdict put them in the report.
+            over += 1
+            if over == 1:
+                notes.append(
+                    f"T={t} met the FPR target but L(T)={lt:.0f}s exceeds the "
+                    f"{l_limit:.0f}s budget; kept searching upward"
+                )
+    if over > 1:
+        notes.append(f"... and likewise for the {over - 1} T values above it")
 
     if best is None:
         # Nothing satisfies both. Report the FPR-only choice and say so loudly —
@@ -384,16 +470,24 @@ def sweep(clutter: np.ndarray, signal: np.ndarray,
 # Main analysis
 # =============================================================================
 
-def analyse(db: str, room: str, idle_timeout: float, fpr_target: float,
-            corroborator: str | None = None) -> tuple[list[GateResult], dict]:
+
+def analyse(
+    db: str,
+    room: str,
+    idle_timeout: float,
+    fpr_target: float,
+    corroborator: str | None = None,
+    settle_s: float = DEFAULT_SETTLE_S,
+) -> tuple[list[GateResult], dict]:
     prefix = ENTITY_PREFIX[room]
     class_entity = f"sensor.mmw_{room}_cal_class"
+    eng_entity = f"switch.{prefix}_radar_engineering_mode"
+    period_entity = f"number.{prefix}_gate_log_period"
 
     gate_entities = [
-        f"sensor.{prefix}_g{g}_{ch}"
-        for g in range(N_GATES) for ch in ("move", "still")
+        f"sensor.{prefix}_g{g}_{ch}" for g in range(N_GATES) for ch in ("move", "still")
     ]
-    wanted = [class_entity] + gate_entities
+    wanted = [class_entity, eng_entity, period_entity] + gate_entities
     if corroborator:
         wanted.append(corroborator)
     series = load_series(db, wanted)
@@ -408,7 +502,8 @@ def analyse(db: str, room: str, idle_timeout: float, fpr_target: float,
     # blower/lamp are covariates carried alongside it.
     cls_label = np.array([str(s).split("|")[0] for s in cls_raw], dtype=object)
     cls_blower = np.array(
-        [(str(s).split("|") + ["", ""])[1] for s in cls_raw], dtype=object)
+        [(str(s).split("|") + ["", ""])[1] for s in cls_raw], dtype=object
+    )
 
     # CORROBORATED EMPTY. E_clutter is a tail percentile of the empty class,
     # and a tail percentile is exactly the statistic a few contaminated
@@ -425,41 +520,103 @@ def analyse(db: str, room: str, idle_timeout: float, fpr_target: float,
     if corroborator:
         corr_ts, corr_raw = series[corroborator]
         if corr_ts.size == 0:
-            sys.exit(f'--corroborate given but {corroborator} has no history')
+            sys.exit(f"--corroborate given but {corroborator} has no history")
         corr_val = np.array([str(x) for x in corr_raw], dtype=object)
+
+    # ---- one grid, and which instants carry LIVE gate energies (Rev 0.2) -----
+    # Outside engineering mode the gate sensors do not go unavailable: they
+    # HOLD their last value. Rev 0.1 was blind to that by accident - no change,
+    # no row - but forward-filling would count hours of one stale value, so
+    # every gate sample is masked by the engineering-mode switch explicitly.
+    # Rev 0.3: on the heartbeat firmware (mmwave-node-common.yaml Rev 0.3) they
+    # read unknown instead [I until observed]. The mask stays: data recorded on
+    # the older firmware still holds.
+    eng_ts, eng_raw = series[eng_entity]
+    if eng_ts.size == 0:
+        sys.exit(
+            f"No history for {eng_entity}. Without it a live gate energy cannot "
+            f"be told from a stale held one, and nothing below would mean "
+            f"anything."
+        )
+    t_end = max(float(s[0][-1]) for s in series.values() if s[0].size)
+    grid = np.arange(float(cls_ts[0]), t_end + GRID_S, GRID_S)
+    eng_on = (
+        step_lookup(eng_ts, np.array([str(x) for x in eng_raw], dtype=object), grid)
+        == "on"
+    )
+    labels = step_lookup(cls_ts, cls_label, grid)
+    # ---- settle window (Rev 0.3) - see DEFAULT_SETTLE_S ----------------------
+    # Timed from changes of the LABEL only: cal_class also changes when the
+    # blower or the lamp does, and nobody crossed the room when the furnace lit.
+    settled = np.ones(grid.size, dtype=bool)
+    if settle_s > 0:
+        t_chg = cls_ts[np.r_[True, cls_label[1:] != cls_label[:-1]]]
+        i = np.searchsorted(t_chg, grid, side="right") - 1
+        since = grid - t_chg[np.maximum(i, 0)]
+        settled = (i < 0) | (since >= settle_s)
+    settle_min = float((~settled & eng_on & (labels != "")).sum()) * GRID_S / 60.0
+    labels[~settled] = ""  # "" = dropped, as before any label
+    blower = step_lookup(cls_ts, cls_blower, grid)
+    agree = (
+        step_lookup(corr_ts, corr_val, grid) == "on" if corr_ts is not None else None
+    )
+
+    per_ts, per_raw = series[period_entity]
+    period = resample(per_ts, to_float(per_raw), grid)
+    unknown_period = np.isnan(period) | (period <= 0)
+    period[unknown_period] = DEFAULT_GATE_PERIOD_S
+
+    def n_snap(mask: np.ndarray) -> int:
+        """Snapshots, not grid points - see MIN_SNAPSHOTS."""
+        return round(float((GRID_S / period[mask]).sum()))
 
     seats = SEAT_LABELS[room]
     motions = MOTION_LABELS[room]
-    l_limit = idle_timeout / 3.0          # §5.9.3
+    l_limit = idle_timeout / 3.0  # §5.9.3
 
     results: list[GateResult] = []
     diag: dict = {
         "blower_on_fraction_when_empty": float("nan"),
         "class_minutes": defaultdict(float),
         "seat_gate": {},
-        "seat_lift": {},        # {seat: {gate: median lift over empty}}
-        "n_empty_max": 0,       # sets the smallest certifiable FPR
+        "seat_lift": {},  # {seat: {gate: median lift over empty}}
+        "n_empty_max": 0,  # sets the smallest certifiable FPR
         "corroborator": corroborator,
         "corr_dropped": 0,
         "corr_kept": 0,
-        "sample_period_s": 1.0,
+        # the publish period that n snapshots were taken at; the report turns
+        # n back into hours and FPR into false snapshots per hour with it
+        "sample_period_s": (
+            float(np.median(period[eng_on])) if eng_on.any() else DEFAULT_GATE_PERIOD_S
+        ),
+        "period_assumed_h": float((unknown_period & eng_on).sum()) * GRID_S / 3600.0,
+        "settle_s": settle_s,
+        "settle_min": settle_min,  # live labelled minutes the window dropped
     }
+
+    is_empty = np.isin(labels, list(EMPTY_LABELS))
 
     # --- how much of the empty class had the blower running -------------------
     # §5.3 collection B is "the one people skip and it drives false positives."
     # Here it is not a separate run, it is a subset of the passive collection —
     # so the thing to check is whether that subset EXISTS.
-    empty_mask_cls = np.isin(cls_label, list(EMPTY_LABELS))
-    if empty_mask_cls.any():
+    # CHANGED 2026-09-26: a fraction of live empty TIME. Rev 0.1 took it over
+    # cal_class rows, i.e. over label and blower CHANGES.
+    empty_live = is_empty & eng_on
+    if empty_live.any():
         diag["blower_on_fraction_when_empty"] = float(
-            (cls_blower[empty_mask_cls] == "blower_on").mean())
+            (blower[empty_live] == "blower_on").mean()
+        )
 
     # --- minutes per class ----------------------------------------------------
-    if cls_ts.size > 1:
-        durs = np.diff(cls_ts, append=cls_ts[-1])
-        for lab, d in zip(cls_label, durs):
-            if 0 < d < 6 * 3600:          # ignore restarts and long gaps
-                diag["class_minutes"][lab] += d / 60.0
+    # CHANGED 2026-09-26: minutes with engineering mode on, i.e. USABLE data.
+    # Rev 0.1 summed gaps between cal_class rows, which gave the label still in
+    # force when the database was copied zero minutes.
+    for lab in np.unique(labels[eng_on]):
+        if lab:
+            diag["class_minutes"][lab] = (
+                float((labels[eng_on] == lab).sum()) * GRID_S / 60.0
+            )
 
     for g in range(N_GATES):
         for ch in ("move", "still"):
@@ -488,34 +645,33 @@ def analyse(db: str, room: str, idle_timeout: float, fpr_target: float,
                 results.append(r)
                 continue
 
-            vals = to_float(raw)
-            labels = step_lookup(cls_ts, cls_label, ts)
+            vals = resample(ts, to_float(raw), grid)
+            vals[~eng_on] = np.nan  # held, stale - see the grid above
+            live = ~np.isnan(vals)
 
-            empty_m = np.isin(labels, list(EMPTY_LABELS))
-            if corr_ts is not None:
-                agree = step_lookup(corr_ts, corr_val, ts) == 'on'
-                before = int(empty_m.sum())
+            empty_m = is_empty & live
+            if agree is not None:
+                before = n_snap(empty_m)
                 empty_m = empty_m & agree
-                diag['corr_dropped'] += before - int(empty_m.sum())
-                diag['corr_kept'] += int(empty_m.sum())
+                diag["corr_dropped"] += before - n_snap(empty_m)
+                diag["corr_kept"] += n_snap(empty_m)
             # STILL thresholds come from seats; MOVE thresholds from motion.
             sig_labels = seats if ch == "still" else motions
-            sig_m = np.isin(labels, list(sig_labels))
+            sig_m = np.isin(labels, list(sig_labels)) & live
 
-            r.n_clutter = int(empty_m.sum())
-            r.n_signal = int(sig_m.sum())
+            r.n_clutter = n_snap(empty_m)
+            r.n_signal = n_snap(sig_m)
             diag["n_empty_max"] = max(diag["n_empty_max"], r.n_clutter)
-            if ts.size > 1:
-                diag["sample_period_s"] = float(np.median(np.diff(ts))) or 1.0
 
             r.e_clutter = pct(vals[empty_m], 99.5)
             r.e_signal = pct(vals[sig_m], 5.0)
 
-            if r.n_clutter < 100 or r.n_signal < 100:
+            if r.n_clutter < MIN_SNAPSHOTS or r.n_signal < MIN_SNAPSHOTS:
                 r.verdict = "INSUFFICIENT"
                 r.notes.append(
-                    f"n_empty={r.n_clutter}, n_signal={r.n_signal}; "
-                    f"need >=100 in each before a tail percentile means anything"
+                    f"n_empty={r.n_clutter}, n_signal={r.n_signal} snapshots; "
+                    f"need >={MIN_SNAPSHOTS} in each before a tail percentile "
+                    f"means anything"
                 )
                 results.append(r)
                 continue
@@ -535,13 +691,13 @@ def analyse(db: str, room: str, idle_timeout: float, fpr_target: float,
                 empty_med = pct(vals[empty_m], 50.0)
                 worst_p5, worst_seat = float("inf"), ""
                 for seat in sorted(sig_labels):
-                    m = labels == seat
-                    if m.sum() < 100:
+                    m = (labels == seat) & live
+                    if n_snap(m) < MIN_SNAPSHOTS:
                         continue
                     lift = pct(vals[m], 50.0) - empty_med
                     diag["seat_lift"].setdefault(seat, {})[g] = lift
                     if lift < OCCUPANCY_LIFT:
-                        continue          # this seat is not seen in this gate
+                        continue  # this seat is not seen in this gate
                     p5 = pct(vals[m], 5.0)
                     if p5 < worst_p5:
                         worst_p5, worst_seat = p5, seat
@@ -579,15 +735,23 @@ def analyse(db: str, room: str, idle_timeout: float, fpr_target: float,
                 continue
 
             t, fpr, fnr, lt, notes = sweep(
-                vals[empty_m], vals[sig_m], ts[sig_m], fpr_target, l_limit)
+                vals[empty_m], vals[sig_m], grid[sig_m], fpr_target, l_limit
+            )
             r.threshold, r.fpr, r.fnr, r.l_t = t, fpr, fnr, lt
             r.notes.extend(notes)
             if not math.isnan(t):
                 r.margin = r.e_signal - t
+            # Rev 0.3: when no T meets both FPR and L(T), sweep() returns the
+            # FPR-only T with a note - but the verdict below was set from SM
+            # alone, so the gate read OK, the note was never printed (not in
+            # the flagged list) and the exit code was 0. Found 2026-09-26 on
+            # synthetic data: g2_still L(T) 44 s against a 30 s budget, "OK".
+            if not math.isnan(t) and lt >= l_limit:
+                r.verdict = "L(T) OVER BUDGET — check geometry"
 
             if ch == "still" and r.driving_class:
-                m = labels == r.driving_class
-                r.acf_lag_s, r.n_eff, _ = autocorr_report(ts[m], vals[m])
+                m = (labels == r.driving_class) & live
+                r.acf_lag_s, r.n_eff, _ = autocorr_report(grid[m], vals[m])
 
             if not r.verdict:
                 if math.isnan(r.sm):
@@ -605,18 +769,29 @@ def analyse(db: str, room: str, idle_timeout: float, fpr_target: float,
 # Reporting
 # =============================================================================
 
+
 def fmt(x: float, nd: int = 1) -> str:
-    return "—" if (x is None or (isinstance(x, float) and math.isnan(x))) \
+    return (
+        "—"
+        if (x is None or (isinstance(x, float) and math.isnan(x)))
         else f"{x:.{nd}f}"
+    )
 
 
-def report_md(results: list[GateResult], diag: dict, room: str,
-              idle_timeout: float, fpr_target: float) -> str:
+def report_md(
+    results: list[GateResult],
+    diag: dict,
+    room: str,
+    idle_timeout: float,
+    fpr_target: float,
+) -> str:
     L = []
     L.append(f"# Gate threshold derivation — {room}")
     L.append("")
-    L.append(f"- idle timeout: **{idle_timeout:.0f} s**  ->  "
-             f"L(T) budget **{idle_timeout/3:.0f} s** (§5.9.3)")
+    L.append(
+        f"- idle timeout: **{idle_timeout:.0f} s**  ->  "
+        f"L(T) budget **{idle_timeout / 3:.0f} s** (§5.9.3)"
+    )
     L.append(f"- FPR target: **{fpr_target:.4f}**")
     L.append("")
 
@@ -627,15 +802,19 @@ def report_md(results: list[GateResult], diag: dict, room: str,
         pctd = (100.0 * dropped / total) if total else 0.0
         L.append("## Corroborated empty")
         L.append("")
-        L.append(f"Empty class intersected with `{diag['corroborator']}`: "
-                 f"**{dropped:,} of {total:,} samples dropped ({pctd:.1f}%)**.")
+        L.append(
+            f"Empty class intersected with `{diag['corroborator']}`: "
+            f"**{dropped:,} of {total:,} samples dropped ({pctd:.1f}%)**."
+        )
         L.append("")
         if pctd > 20:
-            L.append("> More than a fifth of the samples labelled empty had "
-                     "an independent sensor disagreeing. Treat the labelling "
-                     "discipline as the finding here, not just the thresholds "
-                     "- and compare these numbers against an uncorroborated "
-                     "run before trusting either.")
+            L.append(
+                "> More than a fifth of the samples labelled empty had "
+                "an independent sensor disagreeing. Treat the labelling "
+                "discipline as the finding here, not just the thresholds "
+                "- and compare these numbers against an uncorroborated "
+                "run before trusting either."
+            )
             L.append("")
     L.append("## Collection B coverage")
     L.append("")
@@ -643,8 +822,8 @@ def report_md(results: list[GateResult], diag: dict, room: str,
         L.append("**No empty-room data at all.** Nothing below is supported.")
     elif frac < 0.10:
         L.append(
-            f"**WARNING — only {frac*100:.1f}% of the empty-room samples had "
-            f"the blower running.** §5.3: *\"Collection B is the one people "
+            f"**WARNING — only {frac * 100:.1f}% of the empty-room samples had "
+            f'the blower running.** §5.3: *"Collection B is the one people '
             f"skip and it drives false positives. The move threshold must "
             f"clear the register's Doppler, not the quiet-room floor.\"* "
             f"Every move threshold below is derived from a quiet room and will "
@@ -652,18 +831,28 @@ def report_md(results: list[GateResult], diag: dict, room: str,
             f"Extend the collection across a heating or cooling cycle."
         )
     else:
-        L.append(f"{frac*100:.1f}% of empty-room samples had the blower "
-                 f"running — collection B is represented.")
+        L.append(
+            f"{frac * 100:.1f}% of empty-room samples had the blower "
+            f"running — collection B is represented."
+        )
     L.append("")
 
     L.append("## Minutes per class")
     L.append("")
+    L.append("Engineering mode on only - the minutes that carry gate energies.")
+    L.append("")
     L.append("| class | minutes |")
     L.append("|---|---|")
-    for lab, mins in sorted(diag["class_minutes"].items(),
-                            key=lambda kv: -kv[1]):
+    for lab, mins in sorted(diag["class_minutes"].items(), key=lambda kv: -kv[1]):
         L.append(f"| {lab} | {mins:.0f} |")
     L.append("")
+    if diag.get("settle_s", 0) > 0:
+        L.append(
+            f"The first {diag['settle_s']:.0f} s after every label change "
+            f"is excluded from every class ({diag['settle_min']:.1f} min "
+            f"of live labelled data) - see DEFAULT_SETTLE_S."
+        )
+        L.append("")
 
     # ---- what this much data can and cannot certify -------------------------
     # The smallest false-positive rate a sample can DEMONSTRATE is 1/n. Asking
@@ -679,10 +868,19 @@ def report_md(results: list[GateResult], diag: dict, room: str,
     if n_e:
         floor = 1.0 / n_e
         hours = n_e * period / 3600.0
-        L.append(f"- empty-room samples: **{n_e:,}** "
-                 f"({hours:.1f} h at {period:.0f} s/sample)")
+        L.append(
+            f"- empty-room samples: **{n_e:,}** "
+            f"({hours:.1f} h at {period:.0f} s/sample)"
+        )
         L.append(f"- smallest demonstrable FPR: **{floor:.2e}** (= 1/n)")
         L.append(f"- requested FPR target: **{fpr_target:.2e}**")
+        if diag["period_assumed_h"] > 0:
+            L.append(
+                f"- **WARNING: the gate publish period had no history for "
+                f"{diag['period_assumed_h']:.1f} h of live data; "
+                f"{DEFAULT_GATE_PERIOD_S:.0f} s was ASSUMED there.** "
+                f"If it was really 1 s, n above is 5x too small."
+            )
         if fpr_target < floor:
             need_h = (1.0 / fpr_target) * period / 3600.0
             L.append("")
@@ -699,26 +897,29 @@ def report_md(results: list[GateResult], diag: dict, room: str,
     L.append("")
 
     for ch, title, src in (
-        ("still", "STILL thresholds — the R1 channel",
-         "seated, motionless"),
-        ("move", "MOVE thresholds — the false-trigger channel",
-         "walking / working"),
+        ("still", "STILL thresholds — the R1 channel", "seated, motionless"),
+        ("move", "MOVE thresholds — the false-trigger channel", "walking / working"),
     ):
         L.append(f"## {title}")
         L.append("")
         L.append(f"E_signal drawn from: {src}")
         L.append("")
-        L.append("| gate | range m | E_clutter P99.5 | E_signal P5 | T0 | "
-                 "**T** | FPR | false/h | FNR | L(T) s | SM | M | verdict |")
+        L.append(
+            "| gate | range m | E_clutter P99.5 | E_signal P5 | T0 | "
+            "**T** | FPR | false/h | FNR | L(T) s | SM | M | verdict |"
+        )
         L.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
         for r in [x for x in results if x.channel == ch]:
             lo = r.gate * GATE_DEPTH_M
             # FPR is a per-sample rate; per hour is the number a human can
             # actually compare against A6's "zero false triggers in 2 h".
-            rate = (r.fpr * 3600.0 / diag["sample_period_s"]) \
-                if not math.isnan(r.fpr) else float("nan")
+            rate = (
+                (r.fpr * 3600.0 / diag["sample_period_s"])
+                if not math.isnan(r.fpr)
+                else float("nan")
+            )
             L.append(
-                f"| g{r.gate} | {lo:.2f}–{lo+GATE_DEPTH_M:.2f} | "
+                f"| g{r.gate} | {lo:.2f}–{lo + GATE_DEPTH_M:.2f} | "
                 f"{fmt(r.e_clutter)} | {fmt(r.e_signal)} | {fmt(r.t0)} | "
                 f"**{fmt(r.threshold, 0)}** | {fmt(r.fpr, 5)} | "
                 f"{fmt(rate, 2)} | {fmt(r.fnr, 4)} | {fmt(r.l_t, 0)} | "
@@ -730,11 +931,13 @@ def report_md(results: list[GateResult], diag: dict, room: str,
     if diag["seat_lift"]:
         L.append("## Per-seat visibility — is each seat SEEN at all?")
         L.append("")
-        L.append("Median still energy above the empty-room median, per gate. "
-                 "A seat with no gate above the occupancy floor is not a "
-                 "threshold problem: **it is shadowed, and §5.9.4 says stop "
-                 "tuning and move the sensor.** Bad geometry is not a bad "
-                 "threshold.")
+        L.append(
+            "Median still energy above the empty-room median, per gate. "
+            "A seat with no gate above the occupancy floor is not a "
+            "threshold problem: **it is shadowed, and §5.9.4 says stop "
+            "tuning and move the sensor.** Bad geometry is not a bad "
+            "threshold."
+        )
         L.append("")
         L.append("| seat | best gate | lift | verdict |")
         L.append("|---|---|---|---|")
@@ -758,16 +961,23 @@ def report_md(results: list[GateResult], diag: dict, room: str,
     L.append("|---|---|---|---|")
     for r in results:
         if r.channel == "still" and r.driving_class:
-            L.append(f"| g{r.gate} | {r.driving_class} | "
-                     f"{fmt(r.acf_lag_s, 1)} | {fmt(r.n_eff, 0)} |")
+            L.append(
+                f"| g{r.gate} | {r.driving_class} | "
+                f"{fmt(r.acf_lag_s, 1)} | {fmt(r.n_eff, 0)} |"
+            )
     L.append("")
-    L.append("A P5 estimated from a few dozen EFFECTIVE samples has a wide "
-             "confidence interval however many raw rows sit behind it. This "
-             "table is what replaced the withdrawn N=150 claim.")
+    L.append(
+        "A P5 estimated from a few dozen EFFECTIVE samples has a wide "
+        "confidence interval however many raw rows sit behind it. This "
+        "table is what replaced the withdrawn N=150 claim."
+    )
     L.append("")
 
-    flagged = [r for r in results if r.verdict.startswith(("OVERLAP", "NO DATA",
-                                                           "INSUFFICIENT"))]
+    flagged = [
+        r
+        for r in results
+        if r.verdict.startswith(("OVERLAP", "NO DATA", "INSUFFICIENT", "L(T)"))
+    ]
     # "NOT SETTABLE" is deliberately not flagged: it is a property of the
     # hardware, not a problem with the collection, and nothing about it changes
     # however long you run.
@@ -790,46 +1000,78 @@ def report_esphome(results: list[GateResult], room: str) -> str:
     and stored in module NVM where nothing can diff them.
     """
     by = {(r.gate, r.channel): r for r in results}
-    L = [f"  # --- COMMISSIONED {room.upper()} THRESHOLDS ---",
-         f"  # generated by scripts/mmwave_calibrate.py — do not hand-edit;",
-         f"  # re-run the script and commit the new output instead (§6.3)."]
+    L = [
+        f"  # --- COMMISSIONED {room.upper()} THRESHOLDS ---",
+        "  # generated by scripts/mmwave_calibrate.py — do not hand-edit;",
+        "  # re-run the script and commit the new output instead (§6.3).",
+    ]
     for g in range(N_GATES):
         for ch in ("move", "still"):
             r = by.get((g, ch))
             if r is not None and r.verdict == "NOT SETTABLE":
                 # Emit it anyway: ESPHome requires the key even though the
                 # module ignores the value. Omitting it breaks the build.
-                L.append(f'  g{g}_{ch}: "{INERT_STILL_VALUE}"'
-                         f'   # inert — module ignores static sensitivity here')
+                L.append(
+                    f'  g{g}_{ch}: "{INERT_STILL_VALUE}"'
+                    f"   # inert — module ignores static sensitivity here"
+                )
                 continue
             if r is None or math.isnan(r.threshold):
-                L.append(f'  # g{g}_{ch}: NOT DERIVED — {r.verdict if r else "missing"}')
+                L.append(
+                    f"  # g{g}_{ch}: NOT DERIVED — {r.verdict if r else 'missing'}"
+                )
                 continue
-            L.append(f'  g{g}_{ch}: "{int(round(r.threshold))}"'
-                     f'   # SM {fmt(r.sm, 2)}, M {fmt(r.margin)}, '
-                     f'L(T) {fmt(r.l_t, 0)}s')
+            if r.verdict.startswith("L(T)"):
+                # A number exists but fails §5.9.3: pasting it would ship a
+                # seat that drops out before the idle timeout.
+                L.append(
+                    f"  # g{g}_{ch}: NOT DERIVED — {r.verdict} "
+                    f"(FPR-only T {r.threshold:.0f}, "
+                    f"L(T) {fmt(r.l_t, 0)}s)"
+                )
+                continue
+            L.append(
+                f'  g{g}_{ch}: "{int(round(r.threshold))}"'
+                f"   # SM {fmt(r.sm, 2)}, M {fmt(r.margin)}, "
+                f"L(T) {fmt(r.l_t, 0)}s"
+            )
     return "\n".join(L)
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--db", required=True,
-                   help="path to a COPY of home-assistant_v2.db")
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    p.add_argument("--db", required=True, help="path to a COPY of home-assistant_v2.db")
     p.add_argument("--room", required=True, choices=["office", "family"])
-    p.add_argument("--idle-timeout", type=float, default=None,
-                   help="total room idle timeout in seconds (sets the L(T) budget)")
+    p.add_argument(
+        "--idle-timeout",
+        type=float,
+        default=None,
+        help="total room idle timeout in seconds (sets the L(T) budget)",
+    )
     p.add_argument("--fpr-target", type=float, default=DEFAULT_FPR_TARGET)
-    p.add_argument("--corroborate", metavar="ENTITY_ID", default=None,
-                   help="restrict the empty class to intervals where this "
-                        "entity is 'on' - e.g. "
-                        "binary_sensor.mmw_family_empty_corroborated, which "
-                        "requires the thermostat to agree the room is empty")
+    p.add_argument(
+        "--corroborate",
+        metavar="ENTITY_ID",
+        default=None,
+        help="restrict the empty class to intervals where this "
+        "entity is 'on' - e.g. "
+        "binary_sensor.mmw_family_empty_corroborated, which "
+        "requires the thermostat to agree the room is empty",
+    )
+    p.add_argument(
+        "--settle",
+        type=float,
+        default=DEFAULT_SETTLE_S,
+        help="seconds after each label change excluded from every "
+        "class; 0 turns the window off (Rev 0.3)",
+    )
     p.add_argument("--emit", choices=["md", "esphome", "both"], default="both")
     a = p.parse_args()
 
     idle = a.idle_timeout or DEFAULT_IDLE_TIMEOUT[a.room]
-    results, diag = analyse(a.db, a.room, idle, a.fpr_target, a.corroborate)
+    results, diag = analyse(a.db, a.room, idle, a.fpr_target, a.corroborate, a.settle)
 
     if a.emit in ("md", "both"):
         print(report_md(results, diag, a.room, idle, a.fpr_target))
@@ -841,14 +1083,17 @@ def main() -> int:
     # Exit non-zero if anything says stop, so this can gate a commit rather than
     # being a report somebody reads optimistically.
     shadowed = [
-        seat for seat, gates in diag["seat_lift"].items()
+        seat
+        for seat, gates in diag["seat_lift"].items()
         if gates and max(gates.values()) < OCCUPANCY_LIFT
     ]
     if shadowed:
-        print(f"\nSTOP: seats not visible to the radar: {', '.join(shadowed)}",
-              file=sys.stderr)
+        print(
+            f"\nSTOP: seats not visible to the radar: {', '.join(shadowed)}",
+            file=sys.stderr,
+        )
         return 2
-    if any(r.verdict.startswith("OVERLAP") for r in results):
+    if any(r.verdict.startswith(("OVERLAP", "L(T)")) for r in results):
         return 1
     return 0
 
