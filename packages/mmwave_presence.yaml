@@ -522,12 +522,19 @@ template:
         # so the automations refuse to act (see input_number). NODE_OFFLINE -
         # presence unknown/unavailable; the lamp holds whatever it was
         # (Bill 2026-09-22). Before this, an offline node read EMPTY_LIT.
+        # CHANGED 2026-09-27 (P24): DETECTED_FAR added - radar presence with no
+        # approach inside 70 in: the bathroom next door, or someone who stayed
+        # in the doorway. The lamp logic treats it as empty; see "mmW Office
+        # occupied".
         state: >
           {% if states('input_number.mmw_office_lux_on') | float(0) <= 0
                 or states('input_number.mmw_office_idle_timeout') | float(0) <= 0 %}
             UNCOMMISSIONED
           {% elif states('binary_sensor.office_mmwave_presence') in ['unknown','unavailable'] %}
             NODE_OFFLINE
+          {% elif is_state('binary_sensor.office_mmwave_presence','on')
+                  and not is_state('binary_sensor.mmw_office_occupied','on') %}
+            DETECTED_FAR
           {% elif is_state('binary_sensor.office_mmwave_presence','on') %}
             OCCUPIED
           {% elif is_state('binary_sensor.office_mmwave_lux_stale','on') %}
@@ -605,6 +612,84 @@ template:
                   or is_state('switch.family_room_3','on')) else 'lamp_off' %}
           {{ label ~ '|' ~ blower ~ '|' ~ lamp }}
 
+  # ---- P24: THE BATHROOM FILTER - occupancy must START near the sensor -----
+  # ADDED 2026-09-27. Radar presence alone lit the lamp for a person in the
+  # bathroom next door, through the wall: 13 presence edges in two runs with
+  # the office empty, 2026-09-27, every one a target at gate 3, 89.4-118.1 in
+  # [M]. The doorway is gate 3 too - 11 of 11 walk-ins first read 115-117 in
+  # [M] - so no first-frame, energy or max-gate rule separates them. And Bill
+  # stays put in the doorway (Bill 2026-09-27: "the door way"), so a 2/2
+  # max-gate cap would read him empty there. Approach does separate them:
+  #   bathroom  nearest reading 89.4 in [M: 112 flag-on readings, 13 edges]
+  #   walk-ins  inside 70 in within 1.7-4.5 s, median 2.9 [M, n=11]
+  # So occupancy STARTS only on a target reported inside 70 in while radar
+  # presence is on. Once started it HOLDS on anything radar presence holds on,
+  # the doorway included, and it ends when radar presence ends. Evidence,
+  # limits and falsifier: P24 in H:/docs/pending.md.
+  #
+  # FAILURE MODES, accepted: someone who only ever stands in the doorway never
+  # starts it; a bathroom trip straight after leaving the office holds it, and
+  # the lamp, on - holding cannot tell the doorway from the bathroom.
+  #
+  # WHY IT TRIGGERS ON THE DISTANCES AND READS THE FLAGS: the firmware
+  # publishes a frame's target flags BEFORE its distances [S: esphome 2026.9.0
+  # ld2410.cpp:344-366], so at a distance update the flag is that frame's own.
+  # Rendering on a flag change would pair a fresh flag with the previous
+  # frame's distance - Bill's last seated distance with a bathroom target, say.
+  # It is also exactly how the figures above were measured.
+  #
+  # FAILS OPEN: an unrecognised distance unit, or no numeric distance at all
+  # (entities disabled, node just booted), makes this follow radar presence -
+  # the behaviour before the filter - rather than hold a dark room dark. The
+  # unit is read, not assumed: the node reports cm, and HA shows in only
+  # because of a display-unit setting.
+  #
+  # WHY IT ALSO TRIGGERS AT START: the entity restores its last state, and its
+  # triggers attach only at HA start [S: HA 2026.9.3 template/coordinator.py:
+  # 77-84], possibly after ESPHome has reconnected. A room that emptied while
+  # HA was down would keep a restored 'on', the next walk-in would raise no
+  # edge, and the lamp would not light. The start render re-reads presence.
+  - trigger:
+      - platform: state
+        entity_id:
+          - sensor.office_mmwave_moving_distance
+          - sensor.office_mmwave_still_distance
+      - platform: state
+        entity_id: binary_sensor.office_mmwave_presence
+      - platform: homeassistant
+        event: start
+    binary_sensor:
+      - name: "mmW Office occupied"
+        unique_id: mmw_office_occupied
+        device_class: occupancy
+        icon: mdi:account-check
+        availability: >
+          {{ states('binary_sensor.office_mmwave_presence') not in ['unknown','unavailable'] }}
+        state: >
+          {% set approach_in = 70 %}
+          {% set per_in = {'in': 1.0, 'cm': 0.393701, 'mm': 0.0393701,
+                           'm': 39.3701, 'ft': 12.0} %}
+          {% set md = 'sensor.office_mmwave_moving_distance' %}
+          {% set sd = 'sensor.office_mmwave_still_distance' %}
+          {% if not is_state('binary_sensor.office_mmwave_presence','on') %}
+            false
+          {% elif not (states(md) | is_number or states(sd) | is_number)
+                  or per_in.get(state_attr(md,'unit_of_measurement')) is none
+                  or per_in.get(state_attr(sd,'unit_of_measurement')) is none %}
+            true
+          {% elif this.state == 'on' %}
+            true
+          {% elif trigger.platform == 'state' and trigger.entity_id in [md, sd] %}
+            {% set kind = 'moving' if trigger.entity_id == md else 'still' %}
+            {{ is_state('binary_sensor.office_mmwave_' ~ kind ~ '_target','on')
+               and trigger.to_state.state | is_number
+               and trigger.to_state.state | float(999)
+                   * per_in[state_attr(trigger.entity_id,'unit_of_measurement')]
+                   <= approach_in }}
+          {% else %}
+            false
+          {% endif %}
+
   # ---- presence -> lamp latency: R2, measured in production ----------------
   # ADDED 2026-09-22. The bench measured presence->lamp at a median 1.359 s,
   # P95 2.100 s, n=60 [M, 2026-09-08..22] - but the bench decided ON THE NODE.
@@ -622,6 +707,13 @@ template:
   # Counts only lamp-ons this package commanded (stamp within 10 s) while
   # presence is on and rose less than 10 s earlier. A lamp lit by hand, or
   # long after the edge, is not a latency sample.
+  #
+  # FROM 2026-09-27 (P24) the lamp follows "mmW Office occupied", which starts
+  # only once a target is inside 70 in, so this now includes the walk in from
+  # the doorway: median 2.4 s, 1.7-4.3 s [M: replay of the deployed template
+  # over n=11 walk-ins, 2026-09-26..27]. Expect that step in the trend; it is
+  # the filter's cost, not a drift. A start 10 s or more after the radar edge
+  # is not counted.
   - trigger:
       - platform: state
         entity_id: switch.office_lamp
@@ -969,7 +1061,11 @@ automation:
     max_exceeded: silent
     trigger:
       - platform: state
-        entity_id: binary_sensor.office_mmwave_presence
+        # CHANGED 2026-09-27 (P24): was binary_sensor.office_mmwave_presence,
+        # which also went on for a person in the bathroom next door. See the
+        # "mmW Office occupied" template above. It goes unavailable whenever
+        # radar presence does, so the note below still holds.
+        entity_id: binary_sensor.mmw_office_occupied
         # CHANGED 2026-09-22: was `from: "off"`. On the bench, 24 of 36 returns
         # from `unavailable` came back straight to `on` [M, 2026-09-08..22] -
         # presence already reported when the node or HA reconnected. `from:
@@ -1027,9 +1123,11 @@ automation:
       # §4.2 — LUX IS SAMPLED HERE AND ONLY HERE, at the dark->occupied edge.
       # MOVED 2026-09-22 from `condition:` to after the wait, and presence is
       # re-checked: the room may have emptied during the wait.
+      # CHANGED 2026-09-27 (P24): re-checks "mmW Office occupied", the entity
+      # the trigger now follows, not raw radar presence.
       - condition: template
         value_template: >
-          {{ is_state('binary_sensor.office_mmwave_presence','on')
+          {{ is_state('binary_sensor.mmw_office_occupied','on')
              and states('sensor.office_mmwave_ambient_light') | float(999)
                  < states('input_number.mmw_office_lux_on') | float(0) }}
       - service: script.mmw_office_lamp_set
@@ -1721,6 +1819,13 @@ automation:
 #     around the clock; in production it is on for the 10-minute SPC window
 #     and labelled runs only.
 #   * moving_target - the family dashboard charts it.
+#   * CHANGED 2026-09-27 (P24): the OFFICE moving and still distances (Bill
+#     2026-09-27: "we need the 2 distance readings for tuning"). The bathroom
+#     filter's 70 in limit, and its falsifier - a bathroom target at 70 in or
+#     nearer - are read from their history, so "Nothing reads their history"
+#     above no longer holds for these two. Cost: 33,144 rows/day [M: 24 h to
+#     2026-09-27 14:40Z, two test runs included]. Re-exclude them when the
+#     tuning is done. The family distances stay excluded: no filter there.
 # Explicit ids, not a glob: `sensor.*_mmwave_*` would also catch the bench
 # node's sensor.bench_mmwave_* series. HA merges a package's
 # recorder.exclude lists into the main recorder config (config.py
@@ -1728,8 +1833,7 @@ automation:
 recorder:
   exclude:
     entities:
-      - sensor.office_mmwave_moving_distance
-      - sensor.office_mmwave_still_distance
+      # office moving/still distance: recorded again, see "NOT excluded" (P24)
       - sensor.office_mmwave_detection_distance
       - sensor.office_mmwave_moving_energy
       - sensor.office_mmwave_still_energy
