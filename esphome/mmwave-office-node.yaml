@@ -30,6 +30,8 @@ substitutions:
   # 2026-09-28, Bill: the room total runs at 10 s ("works well for me"), so
   # the lamp goes off when THIS 30 s hold ends. The package seed is 120 s,
   # not the 90 s above (mmw_seed_uncommissioned_helpers).
+  # Later the same day the seed became 10 s too, Bill: "change the seeds
+  # to 30/10".
   radar_timeout_s: "30"
 
   # Placeholders. §5.2 replaces them with the first gate beyond the far wall,
