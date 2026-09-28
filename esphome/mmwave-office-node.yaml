@@ -19,12 +19,17 @@ substitutions:
   friendly: Office mmWave
   room_name: Office
   room_slug: office
-  fw_version: "0.2-draft"
+  # 0.3 = gate heartbeat (installed 2026-09-26, but it shipped still reading
+  # 0.2-draft - R13 in CHANGELOG). 0.4 = durable G0 70, 2026-09-28.
+  fw_version: "0.4"
 
   # Idle timeout, §5.5: office 60-120 s. The ROOM-level total lives in HA as
   # input_number.mmw_office_idle_timeout (default 90 s). This is the MODULE's
   # own hold only — short, so the two do not add. See TIMEOUT ARITHMETIC in the
   # common file.
+  # 2026-09-28, Bill: the room total runs at 10 s ("works well for me"), so
+  # the lamp goes off when THIS 30 s hold ends. The package seed is 120 s,
+  # not the 90 s above (mmw_seed_uncommissioned_helpers).
   radar_timeout_s: "30"
 
   # Placeholders. §5.2 replaces them with the first gate beyond the far wall,
@@ -52,6 +57,19 @@ substitutions:
   # file. After the §5.9 sweep, paste the analysis script's output block here,
   # commit, and reflash. The commit hash is the calibration record (R9).
   # scripts/mmwave_calibrate.py --room office --emit esphome
+  #
+  # ONE MEASURED EXCEPTION, 2026-09-28 (P25, H:/docs/pending.md): gate 0
+  # move 50 -> 70. At 50, single-frame gate-0 ghosts from the loaded office PC
+  # (energy 51-57 at 11.8 in) started presence in an empty room, and 11.8 in
+  # is inside the 70 in P24 approach limit, so that filter cannot stop them.
+  # Set live 09-26 22:12Z and scored over 25.1 h labelled empty: 0 of 28 radar
+  # edges opened at gate 0, against 20.1 expected at the G0 = 50 rate
+  # [D: 19 / 4.17 h x 4.41 h of PC > 90 W]; Poisson P(0 | 20.1) = 1.9e-9 [D].
+  # It lives HERE because push_commissioned_state rewrites every gate at each
+  # boot, so a value set only through the number entity reverts to 50. Limits:
+  # one PC, one load mix. Still not a section 5.9 calibration - the sweep's
+  # output block replaces this line along with the rest.
+  g0_move: "70"
 
 esphome:
   name: ${node_name}
