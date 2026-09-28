@@ -11,6 +11,10 @@
 # THE LABEL BUTTONS ARE FIRST AND LARGEST ON PURPOSE. A label that takes three
 # taps through a dropdown gets skipped, and a skipped label is worse than no
 # label: the interval still gets recorded, just into the wrong class.
+#
+# CHANGED 2026-09-28: the node went live (P24, GO-LIVE DECISIONS). The label
+# buttons stay first because the labels still score the P24 tuning. The
+# collection-phase cards below are updated, each with its own dated note.
 # =============================================================================
 type: sections
 max_columns: 3
@@ -71,11 +75,12 @@ sections:
         unit: lx
         min: 0
         max: 60
-        needle: true
-        severity:
-          green: 0
-          yellow: 18
-          red: 30
+        # CHANGED 2026-09-28: needle and severity bands (green 0 / yellow 18 /
+        # red 30) removed. The bands were a second copy of lux_on - 18 was the
+        # provisional seed - and a gauge cannot read a helper, so any number
+        # here goes stale the next time "Turn on below" is changed (R10). That
+        # row, beside this card, is the one copy. The needle only pointed into
+        # the bands.
 
       - type: entities
         title: The controlled load
@@ -97,6 +102,15 @@ sections:
             name: Presence to lamp (last, s)
           - entity: input_number.mmw_office_idle_timeout
             name: Idle timeout (total)
+          # ADDED 2026-09-28: the radar's own hold. The lamp's hold is the
+          # larger of the two, because the off automation waits
+          # max(idle - radar, 0) past presence-off. Read-only on purpose: the
+          # firmware pushes radar_timeout_s at every boot, so a live change
+          # here is undone at the next one - change it in
+          # esphome/mmwave-office-node.yaml.
+          - type: simple-entity
+            entity: number.office_mmwave_radar_timeout
+            name: Radar hold (minimum total)
           - entity: input_number.mmw_office_cmd_window
             name: R4a command window
           - type: divider
@@ -112,14 +126,15 @@ sections:
     cards:
       - type: markdown
         text_only: true
+        # CHANGED 2026-09-28: was "Collection coverage", with the 6 h empty /
+        # 1 h at-desk collection targets. Retired at go-live.
         content: >
-          ### Collection coverage
+          ### Labelled hours
 
 
-          Targets: **6 h** empty (spanning at least one heating or cooling
-          cycle), **1 h** at the desk including one unbroken 10-minute run.
-          Hours below those and the thresholds derived from this data are not
-          supported by it.
+          Hours recorded under each label. The collection targets are retired:
+          the node went live on 2026-09-28 and the heat-on collection (B) was
+          waived. The labels still score the P24 tuning.
 
       - type: entities
         entities:
@@ -143,7 +158,8 @@ sections:
 
 
           Gate energies only exist while engineering mode is on (§6.1). If these
-          are flat, check the Eng mode badge before suspecting the radar.
+          are flat, check the Eng mode badge before suspecting the radar. The
+          target distances do not need it.
 
       - type: history-graph
         hours_to_show: 6
@@ -153,10 +169,30 @@ sections:
             name: Presence (UART)
           - entity: binary_sensor.office_mmwave_presence_hardware_out
             name: Presence (OUT wire)
+          # ADDED 2026-09-28: what the lamp follows (the P24 approach filter)
+          # and the lamp itself, so a lamp-off reads here end to end.
+          - entity: binary_sensor.mmw_office_occupied
+            name: Occupied (the lamp follows this)
+          - entity: switch.office_lamp
+            name: Lamp
           - entity: input_select.mmw_office_label
             name: Label
           - entity: sensor.office_mmwave_ambient_light
             name: Lux
+
+      # ADDED 2026-09-28 for the P24 tuning (Bill: "we need the 2 distance
+      # readings for tuning"). Both update with engineering mode off. 2 h,
+      # like the gate graphs, because both series are dense. REMOVE THIS CARD
+      # when the tuning closes and the two series are excluded from the
+      # recorder again - after that it draws nothing.
+      - type: history-graph
+        hours_to_show: 2
+        title: Target distance (P24 tuning)
+        entities:
+          - entity: sensor.office_mmwave_moving_distance
+            name: Moving
+          - entity: sensor.office_mmwave_still_distance
+            name: Still
 
       - type: history-graph
         hours_to_show: 2
@@ -179,40 +215,12 @@ sections:
           - sensor.office_mmwave_g4_still
 
   # ---------------------------------------------------------------------------
+  # CHANGED 2026-09-28: the "No independent witness in this room" note and
+  # the climate.upstairs blower-covariate card are removed, and with them
+  # this section's full width. Both served collection B, which Bill waived
+  # at go-live (the heat-on test, A6). The text is in git history (4c97a32).
   - type: grid
-    column_span: 3
     cards:
-      - type: markdown
-        text_only: true
-        content: >
-          ### No independent witness in this room
-
-
-          The family room view has a thermostat cross-check on its empty class.
-          **The office does not** — the upstairs Ecobee is too far away to see
-          this room, so its motion and occupancy sensors are not evidence about
-          it and are deliberately absent here.
-
-
-          What that costs: `E_clutter` for this node rests entirely on the
-          labelling being right. On synthetic data, ten minutes of mislabelled
-          occupancy inside a ninety-minute empty run was enough to condemn a
-          good gate. In the family room `--corroborate` catches that. **Here,
-          discipline is the only control** — tap *No one present* when you get
-          up, and treat the label-contradiction badge as the last line rather
-          than a backstop.
-
-
-          The zone below is still correct and still useful: the office IS on the
-          upstairs zone, so `hvac_action` is the right blower covariate for
-          collection B. Blower state is a property of the zone, not of how far
-          away the thermostat sits.
-
-      - type: entities
-        entities:
-          - entity: climate.upstairs
-            name: Zone (blower covariate — still valid)
-
       - type: entities
         title: Node health (§6.2, §6.3)
         entities:
@@ -234,3 +242,9 @@ sections:
             name: Last reset reason
           - entity: sensor.office_mmwave_radar_firmware
             name: Radar firmware
+          # ADDED 2026-09-28 (P25): firmware 0.4 pushes this at every boot.
+          # Read-only on purpose: a live change is undone at the next boot -
+          # change g0_move in esphome/mmwave-office-node.yaml.
+          - type: simple-entity
+            entity: number.office_mmwave_g0_move_threshold
+            name: G0 move threshold
