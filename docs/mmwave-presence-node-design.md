@@ -473,6 +473,14 @@ Drawing A101 (*Edgewater Hill Lot 15, dream developers, 1.31.2021*) gives **LIVI
 
 **5.23 m sits inside the 5.6 m target with about 0.37 m of margin.** So §3.6 covers the space that matters, and §5.2a's acceptance walk should be conducted to the counter face rather than the wall.
 
+> **CORRECTED 2026-10-02: there are no counters at the 17'-7" line.** Scaled off A101 (Bill's
+> copy, `East Hampton Home/20210216121002066.pdf`), the kitchen counters, sink, range and
+> refrigerator stand on the kitchen's north and west walls, 9.4-10.0 m from the hearth front [D].
+> The owner's 2026-09-07 "the far end carries counters and appliances" is the far end of the
+> kitchen, not the living-room boundary. Past the line is open floor and then the island, so the
+> "occupiable space" figures above (4.75 / 5.23 m) do not hold, and the next note gives the real
+> distances.
+
 Two caveats on that arithmetic. 24" is a standard base-cabinet depth; **a refrigerator or range run is 30–36" and would push the occupiable limit further in**, giving more margin, not less. And the correction only applies where fixtures actually run — an open corner has none, so **the walk should establish the true furthest standing point rather than assume the counter line is continuous.**
 
 The general point is worth keeping even after this room is commissioned: **a detection-range requirement measured to a wall over-specifies the problem** wherever anything occupies the perimeter. Furniture, counters and appliances all buy range back for free.
@@ -482,6 +490,32 @@ Note also that the corners sit only **23° off boresight** — well inside the �
 **THE WEST SIDE HAS NO WALL, AND THAT IS A DECISION RATHER THAN A DEFECT.**
 
 The plan shows no partition between the living room and the **KITCHEN (17'-5" × 18'-7")** — it is one continuous space, broken only by an island. The sightline from the mantel does not stop at 17'-7"; it runs on roughly another 17 ft. At the module's ~6 m ceiling the radar reaches about two feet past the living room boundary, which is where the island is.
+
+> **CORRECTED 2026-10-02: the kitchen working area is out of the radar's range.**
+> - **Source:** scaled off A101 [S]. Seven dimension strings agree at 33.25-33.50 px/ft [M:
+>   line-detected on the scan].
+> - **Distances** are measured from the hearth front, which sits 12.6" proud of the wall. The
+>   figure in brackets is from the wall face [D]:
+>   - to the 18'-5"/17'-7" line: 4.87 m (5.19 m), which is gate 6, not 7;
+>   - to the island's east (stool) edge: 7.56 m (7.88 m). That edge is 8'-10" past the line,
+>     not about two feet;
+>   - to the island's west edge: 8.42 m (8.74 m);
+>   - to the sink: 9.44 m (9.75 m);
+>   - to the range: 9.73 m (10.04 m).
+> - **No setting reaches the kitchen from the mantel.** The LD2410 caps max gate at 8 [S: ESPHome
+>   2026.8.2 `components/ld2410/number/__init__.py` l.98, l.104]. At 0.75 m gates the last gate
+>   ends at 6.75 m, 0.81 m short of the island's nearest edge [D].
+> - **The first labelled test agrees.** It recorded 564 s of kitchen work at the empty-room level
+>   on every gate [M, 2026-10-02, n=3 spans].
+> - **What still stands, and what does not:**
+>   - The owner decision below still stands as a lighting rule.
+>   - Since 2026-10-02 the kitchen's witness for lamps-off is the Ecobee's `main_floor_motion`,
+>     not the radar (package `mmw_family_presence_off`).
+>   - The next paragraph's "coincident in range" and consequence 1's "the island is reached
+>     deliberately" rest on the old premise.
+>   - Gate 8 is still right, but only because it is the largest.
+> - **Caveat:** A101 is a permit drawing, not as-built. Falsifier: a tape from the mantel to the
+>   island's east edge that reads under 6.75 m (22'-2").
 
 That matters because **the living room's far wall and the kitchen's near boundary are the same plane at 5.36 m.** Unlike the office — where the bathroom sits in gates 3–4 and a person entering sits in gates 0–2, cleanly separable — here the wanted and unwanted returns are *coincident in range*. No max-gate setting distinguishes them, and there is no wall to attenuate one of them.
 
