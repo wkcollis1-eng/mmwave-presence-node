@@ -916,10 +916,25 @@ Non-human *motion* is, and collection B finds it. Any gate with sustained move e
 | Source | Fix |
 |---|---|
 | Supply register | raise that gate's **move** threshold only |
-| Ceiling fan | as above, or re-aim so it is behind the radar |
+| Ceiling fan | as above, or re-aim so it is behind the radar. **Failed in the family room, 2026-10-02: see the note below** |
 | Curtains | as above |
 
 Leave the **still** threshold alone — they are independently settable and the false trigger is a Doppler artifact.
+
+> **2026-10-02, family room, ceiling fan on low: the ceiling-fan rule above failed (R13 record).**
+>
+> - **Presence held for the whole run.** The room was empty with the fan on for 33.5 min. Presence and still target stayed on throughout, and moving target almost throughout [M, HA history].
+> - **One fixed target.** The fan read as a single target at 2.95 m [M, n=2690 still-distance points].
+> - **Mostly still energy, against the assumption in the line above.** Time-weighted medians, threshold in brackets [M, InfluxDB]:
+>   - g4 still 86, reaching 100 (30);
+>   - g3 still 48 (40);
+>   - g5 still 36 (30);
+>   - g6-g7 still 20-21 (20);
+>   - g4 move 18, max 51 (20).
+> - **It cannot be thresholded out.** No g4 still threshold sits above 100, so clearing the fan would blind 3.00-3.75 m to a seated person.
+> - **Bill chose no change.** With the fan on, the lamps stay on until it goes off.
+> - **Limits.** One run, at low speed only.
+> - **Full record:** H: `CHANGELOG.md`, 2026-10-02.
 
 Second-order: a strong static reflector leaves cancellation residue that raises the micro-Doppler floor *in that gate*. If §5.9 shows poor separation at a seat that isn't shadowed, this is the likely cause.
 
