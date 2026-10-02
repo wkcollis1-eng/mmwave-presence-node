@@ -40,7 +40,9 @@ substitutions:
   friendly: Family mmWave
   room_name: Family Room
   room_slug: family
-  fw_version: "0.2-draft"
+  # 0.4 from 2026-10-02, staged for first flash: this node builds from the
+  # same mmwave-node-common.yaml as the office node, which reports 0.4.
+  fw_version: "0.4"
 
   # Idle timeout, §5.5: family room 300 s+. The ROOM-level total lives in HA as
   # input_number.mmw_family_idle_timeout (default 300 s). This is the MODULE's
