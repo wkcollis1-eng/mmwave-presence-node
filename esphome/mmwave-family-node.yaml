@@ -2,6 +2,7 @@
 # NODE 2 — FAMILY ROOM
 # -----------------------------------------------------------------------------
 # This file contains NOTHING but substitutions and this node's own API key.
+# Plus, from 2026-10-02, the address the tooling uses to reach it (wifi: use_address).
 # All behaviour is in mmwave-node-common.yaml, which both nodes share byte for
 # byte. (The key moved here 2026-09-22: one key per device is the house
 # convention - api_key_mmwave_bench, api_key_ups_monitor, ... - and the shared
@@ -95,6 +96,17 @@ esphome:
 api:
   encryption:
     key: !secret api_key_mmwave_family_node
+
+wifi:
+  # Where the TOOLING finds this device: the Device Builder add-on has no mDNS
+  # resolver, so <name>.local never resolves there (office node file, same
+  # block). 10.0.0.97 is where this MAC (ac:27:6e:82:0c:04) answered after its
+  # first boot [M: PC ARP table, 2026-10-02]. Compiled in only as the
+  # "Address:" line of the API and OTA config dumps (office file, [S]) - it
+  # changes nothing the device does, so this edit alone needs no reflash.
+  # Bill, 2026-10-02: "reserve the IP" - a DHCP reservation, made in the
+  # router; without it this goes stale when the lease moves.
+  use_address: 10.0.0.97
 
 packages:
   common: !include mmwave-node-common.yaml
