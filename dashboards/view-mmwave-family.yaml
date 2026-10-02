@@ -291,6 +291,21 @@ sections:
           - entity: sensor.family_mmwave_ambient_light
             name: Lux
 
+      # ADDED 2026-10-02 (Bill: "would be helpful to add that to the family
+      # room mmWave dashboard"): the office view's "Target distance (P24
+      # tuning)" card, for this node. HA shows both in inches. They are
+      # recorded only from the first HA restart after this date (package
+      # recorder block, "NOT excluded"); until then the card draws the current
+      # value alone. 2 h, like the gate graphs below.
+      - type: history-graph
+        hours_to_show: 2
+        title: Target distance
+        entities:
+          - entity: sensor.family_mmwave_moving_distance
+            name: Moving
+          - entity: sensor.family_mmwave_still_distance
+            name: Still
+
       - type: history-graph
         hours_to_show: 2
         title: Still energy by gate (the R1 signal)

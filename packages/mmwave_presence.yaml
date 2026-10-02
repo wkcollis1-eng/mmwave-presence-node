@@ -2120,6 +2120,13 @@ automation:
 #     above no longer holds for these two. Cost: 33,144 rows/day [M: 24 h to
 #     2026-09-27 14:40Z, two test runs included]. Re-exclude them when the
 #     tuning is done. The family distances stay excluded: no filter there.
+#   * CHANGED 2026-10-02: the FAMILY moving and still distances too (Bill:
+#     "would be helpful to add that to the family room mmWave dashboard" -
+#     the office's "Target distance (P24 tuning)" graph). The family view
+#     charts them, so the line above about the family no longer holds. Cost
+#     unmeasured; the office pair ran 33,144 rows/day [M, above]. Recording
+#     starts at the first HA restart after the edit: recorder config does
+#     not reload.
 # Explicit ids, not a glob: `sensor.*_mmwave_*` would also catch the bench
 # node's sensor.bench_mmwave_* series. HA merges a package's
 # recorder.exclude lists into the main recorder config (config.py
@@ -2131,8 +2138,7 @@ recorder:
       - sensor.office_mmwave_detection_distance
       - sensor.office_mmwave_moving_energy
       - sensor.office_mmwave_still_energy
-      - sensor.family_mmwave_moving_distance
-      - sensor.family_mmwave_still_distance
+      # family moving/still distance: recorded since 2026-10-02, see "NOT excluded"
       - sensor.family_mmwave_detection_distance
       - sensor.family_mmwave_moving_energy
       - sensor.family_mmwave_still_energy
