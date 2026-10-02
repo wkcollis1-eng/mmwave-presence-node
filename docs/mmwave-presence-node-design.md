@@ -676,7 +676,7 @@ This table is PR Table 7, because the protocol document is a statement about the
 
 ### 4.2 Control logic
 
-**Rule: light level is sampled once, at the dark→occupied transition, and latched.**
+**Rule: light level is sampled once, at the dark→occupied transition, and latched.** *(Family room from 2026-10-02: plus one darkening-room ON - see the note at the end of this section.)*
 
 ```
 state EMPTY_DARK:
@@ -699,6 +699,8 @@ If the node re-evaluated ambient light while the lamp it controls is on, and the
 1. **An edge from `unavailable` or `unknown` is an edge.** A node or HA reconnecting into an occupied room produces `unavailable → on`, and on the bench 24 of 36 reconnects did [M]. `EMPTY_DARK` is entered on `on` from any non-`on` state; the empty-room release likewise counts `unavailable → off`, and still waits the full idle timeout.
 2. **Latch only a lamp this automation lit.** The on-edge requires the lamp to be off. Otherwise a person who lit the lamp by hand, left, and came back after their override cleared would have their lamp latched, and switched off at the next empty room.
 3. **Rev 1.6's deferral rule, bounded.** No lux reading at the edge means wait for one — up to 30 s, three VEML7700 polls — then leave the lamp alone for that occupancy and log it. Unbounded retry would hold an automation run open against a dead sensor; a sensor that has not reported in 30 s is a fault, and `Lux stale` reports it at 1 h.
+
+> **2026-10-02 - family room: lights on as an occupied room darkens** (Bill: "Lights should come while occupied and lux readings go down"). `OCCUPIED` now has one lux transition, ON only: lux below `THRESHOLD_ON` for 10 min, lamp off, no override → lamp ON; latch = TRUE. The rule above still holds for the reason it was written: lux never switches the lamp OFF, and this runs only while the lamp is off, so the lamp's own light cannot start the loop. Without it, a person who sat down in daylight stayed in the dark through dusk (Bill on the couch, 2026-10-02: lux 31 at 15:55 and 18 by 16:06, presence on throughout [M]). The 10 min is three times the longest daylight dip below 30 lx on the one day measured (200 s, of 35 dips [M]) [D: 600 s / 200 s]. An automation reload also re-tests the room, because a reading already below the threshold when the trigger attaches does not fire it. The office is unchanged. Implemented as `mmw_family_dusk_on`; the record is in H: CHANGELOG.md, 2026-10-02.
 
 ### 4.3 Manual override detection (R4a)
 

@@ -110,6 +110,10 @@ input_boolean:
   mmw_office_latch:
     name: "Office: lamp latched by presence"
     icon: mdi:lock-check
+  # ADDED 2026-10-02: in the family room "this automation" is two - the
+  # presence edge (mmw_family_presence_on) and the darkening room
+  # (mmw_family_dusk_on). Both light the lamp the same way and set this,
+  # so the empty-room automation releases a lamp that either one lit.
   mmw_family_latch:
     name: "Family Room: lamp latched by presence"
     icon: mdi:lock-check
@@ -1389,7 +1393,9 @@ automation:
         # lamp on (Bill 2026-09-22: it stays on).
         from: ["off", "unavailable", "unknown"]
         to: "on"
-    condition:
+    # `&mmw_family_light_on_conds` names this list so mmw_family_dusk_on
+    # below reuses it rather than keeping a second copy (2026-10-02, R10).
+    condition: &mmw_family_light_on_conds
       - condition: state
         entity_id: input_boolean.mmw_family_auto_enable
         state: "on"
@@ -1402,6 +1408,9 @@ automation:
       # empty-room automation switch off a lamp a human turned on. The lux
       # test is no guard against that: whether this lamp lifts this node's
       # VEML7700 above lux_on has never been measured.
+      # MEASURED 2026-10-02, once: Bill switched the three lamps on by hand at
+      # dusk and the reading went from 23.8-26.8 to 33.3-35.4 lx [M, 2 samples
+      # on, 15:57:17-15:57:39] - over lux_on (30). The lamps can lift it.
       # "Not on" rather than "all off": a plug that is unavailable must not
       # stop the other two lighting.
       - condition: template
@@ -1450,7 +1459,13 @@ automation:
       # §4.2 — LUX IS SAMPLED HERE AND ONLY HERE, at the dark->occupied edge.
       # MOVED 2026-09-22 from `condition:` to after the wait, and presence is
       # re-checked: the room may have emptied during the wait.
-      - condition: template
+      # CHANGED 2026-10-02 (Bill: "Lights should come while occupied and lux
+      # readings go down"): no longer the only place. mmw_family_dusk_on
+      # below also lights the lamp when an occupied room darkens, and reuses
+      # this test by its anchor (R10). Lux still never switches the lamp
+      # OFF, which is the oscillation §4.2 guards against.
+      - &mmw_family_dark_occupied
+        condition: template
         value_template: >
           {{ is_state('binary_sensor.family_mmwave_presence','on')
              and states('sensor.family_mmwave_ambient_light') | float(999)
@@ -1458,6 +1473,67 @@ automation:
       - service: script.mmw_family_lamp_set
         data:
           lamp_state: "on"
+      - service: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.mmw_family_latch
+
+  # ADDED 2026-10-02 (Bill: "Lights should come while occupied and lux
+  # readings go down"). mmw_family_presence_on tests lux only at the
+  # dark->occupied edge, so a person who sat down in daylight stayed in the
+  # dark through dusk until they left and came back: Bill on the couch
+  # 2026-10-02, presence on from 15:16, lux 31 at 15:55 and 18 by 16:06 [M].
+  # This lights the lamp once when an occupied room darkens. ON ONLY, and
+  # only while the lamp is off: nothing here switches it off, so the lamp's
+  # own light cannot make it oscillate (§4.2).
+  # KNOWN LIMIT: the ceiling fan holds presence on in an empty room (test
+  # 2026-10-02), so a fan left running lights an empty room at dusk - the
+  # same failure Bill accepted for the lights-off side ("That's a harmless
+  # failure").
+  - id: mmw_family_dusk_on
+    alias: "mmW Family: occupied room darkens -> lights on"
+    mode: single
+    max_exceeded: silent
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.family_mmwave_ambient_light
+        below: input_number.mmw_family_lux_on
+        # 10 min, so a passing cloud does not light the lamp. On 2026-10-02
+        # between 10:45 and 15:55 the reading fell below 30 lx 35 times; the
+        # longest dip lasted 200 s (14:29:54-14:33:14), and from 15:57:44 it
+        # stayed below [M, InfluxDB, 10 s writes, ONE day]. 10 min is three
+        # times that dip [D: 600 s / 200 s]. A cloudier day may dip for
+        # longer: the measure is the longest daylight dip with the lamps
+        # off, from the same series. The cost of the wait is a room left
+        # dim for 10 min at dusk. Any reading at or above lux_on restarts it.
+        for: "00:10:00"
+        id: darkened
+      # A reading already below the threshold when the trigger attaches is
+      # not armed [S: core 2026.9.4 homeassistant/triggers/numeric_state.py
+      # l.141-145], so after an automation reload in an occupied dark room
+      # the trigger above stays silent until lux rises and falls again. The
+      # reload event fires after every automation's triggers are attached
+      # [S: core 2026.9.4 automation/__init__.py l.288-296, helpers/
+      # entity_platform.py l.1127]. A restart needs nothing here: presence
+      # returns from `unavailable` and mmw_family_presence_on tests lux.
+      - platform: event
+        event_type: automation_reloaded
+        id: reloaded
+    # The same conditions as mmw_family_presence_on, by its anchor: auto
+    # enable on, no manual override, no lamp on, lux not stale, threshold
+    # commissioned, and not the alarm's armed quiet hours. A lamp a person
+    # switches off sets the override, so it stays off until the room is
+    # next empty.
+    condition: *mmw_family_light_on_conds
+    action:
+      # Tested at fire time, by mmw_family_presence_on's anchor (R10): the
+      # reload trigger carries no lux test, and the room may have emptied
+      # during the 10 min.
+      - *mmw_family_dark_occupied
+      - service: script.mmw_family_lamp_set
+        data:
+          lamp_state: "on"
+      # The latch makes the empty-room automation release this lamp exactly
+      # as it releases one lit at the presence edge.
       - service: input_boolean.turn_on
         target:
           entity_id: input_boolean.mmw_family_latch
