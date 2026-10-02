@@ -1248,6 +1248,126 @@ automation:
             {{ trigger.to_state.state }}); automatic control suspended until the
             room is next empty
 
+  # ---- daylight: the setpoint crossed while someone is in the room ---------
+  # ADDED 2026-10-02 (Bill: "when the unit senses presence and light (lux)
+  # dims below the setpoint turn light on and when senses presence and light
+  # increases above setpoint turn light off"). Until now §4.2 sampled lux at
+  # the dark->occupied edge only: a room that darkened around a seated person
+  # stayed dark, and a lamp lit at dusk stayed on into a bright morning.
+  #
+  # ONE SETPOINT, input_number.mmw_office_lux_on, as Bill asked - but the lamp
+  # lights its own sensor. Lamp on-edges lifted the VEML7700 +10.6 to +17.7 lx,
+  # off-edges -8.4 to -11.2 lx [M: n=22 edges with a reading either side,
+  # 2026-09-28..10-02, all after dark]. Compared raw against 30 lx, the lamp
+  # would switch itself off whenever daylight passed ~18 lx and then come
+  # back on: a loop. So with the lamp on, its largest measured lift is added
+  # to the line, plus a deadband:
+  #     off when  lux > lux_on + lamp_lift + deadband      (30 + 18 + 5 = 53)
+  # i.e. daylight ALONE is at least 5 lx above the setpoint. That cannot loop
+  # while the real lift stays under 23 lx [D: 18 + 5]; the largest seen is
+  # 17.7 [M]. Cost: between the setpoint and that line a lamp that is on
+  # stays on - with the typical 11.5 lx lift it goes off once daylight passes
+  # ~41.5 lx [D: 53 - 11.5].
+  #
+  # REPLAY over 2026-09-28 13:00Z..10-02 12:05Z, real occupancy and lux, the
+  # lamp's lift simulated [D]: 3 dim-ons (dusk, seated) and 1 daylight-off,
+  # 0 off->on within 30 min, the same at any lift 8.4-17.7 lx and at dwells
+  # 30 s/2 min to 2 min/10 min. A simulated 30 lx lift cycles 11 times - the
+  # failure the deadband is there for. Limits: 4 days, early October, one
+  # person; the lift was measured after dark only. Falsifier: a daylight-off
+  # followed by a dim-on within 10 min with no change in the light outside -
+  # read the lux history across the pair.
+  #
+  # The dwells (1 min dark, 5 min bright) are chosen, not measured: long
+  # enough that a passing cloud does not switch the lamp, short enough that a
+  # darkening room is lit within a minute. Both go through the stamped script,
+  # so R4a does not read them as a hand at the switch; a hand that reverses
+  # one sets the override as usual, and wins until the room empties.
+  - id: mmw_office_lux_dim_on
+    alias: "mmW Office: room dims while occupied -> lamp on"
+    mode: single
+    max_exceeded: silent
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.office_mmwave_ambient_light
+        below: input_number.mmw_office_lux_on
+        for: "00:01:00"
+    condition:
+      # the P24 filter, as at the entry edge: a person in the bathroom next
+      # door must not light the office at dusk
+      - condition: state
+        entity_id: binary_sensor.mmw_office_occupied
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.mmw_office_auto_enable
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.mmw_office_manual_override
+        state: "off"
+      - condition: template
+        value_template: "{{ not is_state('switch.office_lamp','on') }}"
+      - condition: template
+        value_template: "{{ not is_state('binary_sensor.office_mmwave_lux_stale','on') }}"
+      - condition: template
+        value_template: "{{ states('input_number.mmw_office_lux_on') | float(0) > 0 }}"
+    action:
+      - service: script.mmw_office_lamp_set
+        data:
+          lamp_state: "on"
+      - service: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.mmw_office_latch
+      - service: logbook.log
+        data:
+          name: "mmW Office"
+          message: >
+            room dimmed to {{ states('sensor.office_mmwave_ambient_light') }} lx
+            while occupied (setpoint {{ states('input_number.mmw_office_lux_on') }}
+            lx) - lamp on
+
+  - id: mmw_office_lux_bright_off
+    alias: "mmW Office: daylight above setpoint -> lamp off"
+    mode: single
+    max_exceeded: silent
+    # trigger_variables so the template trigger can read them - the ONE place
+    # these two numbers live (R10). See the note above.
+    trigger_variables:
+      lamp_lift: 18    # lx: largest measured lamp on-step 17.7 [M], rounded up
+      deadband: 5      # lx: chosen
+    trigger:
+      - platform: template
+        value_template: >
+          {% set s = states('input_number.mmw_office_lux_on') | float(0) %}
+          {% set l = states('sensor.office_mmwave_ambient_light') %}
+          {{ is_state('switch.office_lamp','on') and s > 0 and l | is_number
+             and l | float(0) > s + lamp_lift + deadband }}
+        for: "00:05:00"
+    condition:
+      - condition: state
+        entity_id: input_boolean.mmw_office_auto_enable
+        state: "on"
+      # Only a lamp this package lit (§4.2). A lamp lit by hand carries the
+      # override and no latch, so a bright morning leaves it alone. The latch
+      # also stands in for "senses presence": the empty automation clears it.
+      - condition: state
+        entity_id: input_boolean.mmw_office_latch
+        state: "on"
+      - condition: template
+        value_template: "{{ not is_state('binary_sensor.office_mmwave_lux_stale','on') }}"
+    action:
+      - service: script.mmw_office_lamp_set
+        data:
+          lamp_state: "off"
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.mmw_office_latch
+      - service: logbook.log
+        data:
+          name: "mmW Office"
+          message: >
+            daylight: {{ states('sensor.office_mmwave_ambient_light') }} lx with
+            the lamp on, above setpoint + lamp + deadband - lamp off
+
   # ===========================================================================
   # FAMILY ROOM — presence lighting
   # ===========================================================================
