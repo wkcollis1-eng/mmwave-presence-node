@@ -1501,6 +1501,25 @@ automation:
         entity_id: binary_sensor.main_floor_motion
         from: ["on", "unavailable", "unknown"]
         to: "off"
+        # DEFECT (mine, 2026-10-02, R13): `from: unavailable` also matches the
+        # HomeKit blips - off -> unavailable -> off in 51-172 ms, 183 in 10
+        # days, 5-25 a day [M] - and every run's first action clears
+        # mmw_family_manual_override. The 13:02:00 trace was one: a 70 ms
+        # blip, all five conditions true, override cleared [M]. `unavailable`
+        # stays here because a REAL short outage must still release the lamp
+        # when the Ecobee comes back `off`; the blip filter below drops the
+        # rest. Named so that filter can single this trigger out.
+        id: ecobee_quiet
+      # ADDED 2026-10-02, Bill's outage policy: "after 5 min, let the radar
+      # decide alone". Fires once the Ecobee has been unavailable (or
+      # unknown) for the grace period, so a lamp held by the outage is
+      # released on the radar alone. `&mmw_family_ecobee_grace` is reused by
+      # the condition below (R10).
+      - platform: state
+        entity_id: binary_sensor.main_floor_motion
+        to: ["unavailable", "unknown"]
+        for: &mmw_family_ecobee_grace "00:05:00"
+        id: ecobee_lost
     condition:
       - condition: state
         entity_id: input_boolean.mmw_family_auto_enable
@@ -1521,13 +1540,39 @@ automation:
       # UNAVAILABLE Ecobee fails this condition, so the lamp HOLDS: the safe
       # failure Bill set for a node outage (2026-09-22). Its return to `off`
       # re-fires the Ecobee trigger above.
+      # CHANGED 2026-10-02: it holds for the grace period only - see the
+      # Ecobee condition below.
       - condition: state
         entity_id: binary_sensor.family_mmwave_presence
         state: "off"
         for: *mmw_family_off_wait
-      - condition: state
-        entity_id: binary_sensor.main_floor_motion
-        state: "off"
+      # CHANGED 2026-10-02 (Bill: "after 5 min, let the radar decide
+      # alone"): was `main_floor_motion` off alone. The lamp now HOLDS
+      # through an Ecobee outage only for the grace period; after it the
+      # radar decides alone. The radar cannot see the kitchen working area
+      # (7.56 m and beyond; its last gate ends at 6.75 m [D: drawing A101]),
+      # so in an outage longer than the grace, someone working in the
+      # kitchen can lose the lamps. In 10 days HomeKit never stayed
+      # unavailable longer than 0.172 s [M].
+      - condition: or
+        conditions:
+          - condition: state
+            entity_id: binary_sensor.main_floor_motion
+            state: "off"
+          - condition: state
+            entity_id: binary_sensor.main_floor_motion
+            state: ["unavailable", "unknown"]
+            for: *mmw_family_ecobee_grace
+      # ADDED 2026-10-02: the blip filter (see the DEFECT note on the
+      # `ecobee_quiet` trigger). A return from `unavailable` counts only if
+      # the outage lasted longer than 5 s; the longest blip in 10 days was
+      # 0.172 s [M]. Every other trigger passes.
+      - condition: template
+        value_template: >
+          {{ trigger.id != 'ecobee_quiet'
+             or trigger.from_state.state != 'unavailable'
+             or (trigger.to_state.last_changed
+                 - trigger.from_state.last_changed).total_seconds() > 5 }}
     action:
       - service: input_boolean.turn_off
         target:
