@@ -1832,6 +1832,16 @@ automation:
   - id: mmw_label_contradicted_alert
     alias: "mmW: label contradicted by presence"
     mode: single
+    # OFF 2026-10-02 (Bill: "turn off contradicted label notification").
+    # The office line went earlier the same day; this is the family line.
+    # `initial_state: false` rather than deleting the automation: it wins
+    # over the restored state at every reload and restart [S: core 2026.9.4
+    # automation/__init__.py l.629-656], leaves no orphaned registry entry,
+    # and keeps the alert's reasoning beside it. A UI toggle turns it back
+    # on until the next reload or restart; deleting this line turns it on
+    # for good. Both sensors above still record every contradicted
+    # interval for the §5.9 analysis.
+    initial_state: false
     trigger:
       - platform: state
         entity_id:
