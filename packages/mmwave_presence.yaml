@@ -426,6 +426,14 @@ template:
       # catch the case that matters more: a label that says empty while the
       # radar ALSO fails to see the person. Nothing here can.
       # See open_questions.yaml — what else in the office reports to HA?
+      # NO NOTIFICATION, 2026-10-02 (Bill: "we need to remove this
+      # notification"). The office label has read "no one present" since the
+      # 09-28 go-live - the autoclear below downgrades to it and nothing moves
+      # it back - so this went on every time he sat down for a minute: 86
+      # state changes 09-28 13:00Z..10-02 12:05Z [M: HA history]. The office
+      # line is out of mmw_label_contradicted_alert; this sensor stays,
+      # recorded, as the list of "no one present" intervals any §5.9 analysis
+      # must discard.
       - name: "mmW Office label contradicted"
         unique_id: mmw_office_label_contradicted
         device_class: problem
@@ -1633,7 +1641,8 @@ automation:
     trigger:
       - platform: state
         entity_id:
-          - binary_sensor.mmw_office_label_contradicted
+          # binary_sensor.mmw_office_label_contradicted REMOVED 2026-10-02
+          # (Bill) - see the note at that sensor. The family line stays.
           - binary_sensor.mmw_family_label_contradicted
         to: "on"
     action:
