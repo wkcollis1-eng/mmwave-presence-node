@@ -1480,12 +1480,27 @@ automation:
         # empty wait as the normal path.
         from: ["on", "unavailable", "unknown"]
         to: "off"
-        for: >
+        # `&mmw_family_off_wait` names this wait so a condition below reuses
+        # it rather than recomputing it (2026-10-02, R10).
+        for: &mmw_family_off_wait >
           {# CHANGED 2026-09-22: float(300) -> float(0); see the office. #}
           {% set total = states('input_number.mmw_family_idle_timeout') | float(0) %}
           {% set mod   = states('number.family_mmwave_radar_timeout') | float(30) %}
           {% set w     = [total - mod, 0] | max | int(0) %}
           {{ '%02d:%02d:%02d' % (w // 3600, (w % 3600) // 60, w % 60) }}
+      # ADDED 2026-10-02: the Ecobee is the kitchen's witness. Bill 2026-10-02:
+      # the radar does not reach the kitchen working area (island, counters,
+      # sink, range), and the thermostat is 6-8 ft from it. In the first
+      # labelled test the radar read the empty-room level at every gate for
+      # all 564 s of kitchen work, while main_floor_motion was on for all but
+      # the last 37 s [M]. It held 4 min 55 s after Bill left the main floor
+      # [M, n=1] - roughly how long the lamp now stays on after the kitchen
+      # empties. This trigger releases the lamp when the Ecobee goes quiet
+      # after the radar already has; the conditions below require both.
+      - platform: state
+        entity_id: binary_sensor.main_floor_motion
+        from: ["on", "unavailable", "unknown"]
+        to: "off"
     condition:
       - condition: state
         entity_id: input_boolean.mmw_family_auto_enable
@@ -1498,6 +1513,20 @@ automation:
         value_template: "{{ states('input_number.mmw_family_idle_timeout') | float(0) > 0 }}"
       - condition: state
         entity_id: input_boolean.mmw_family_alarm_running
+        state: "off"
+      # ADDED 2026-10-02 (Bill: "use both the radar and ecobee for lights
+      # off"). Both witnesses must be quiet. The radar must have been off for
+      # the trigger's own wait - the same template, by the anchor above - or
+      # a release by the Ecobee trigger would cut the idle timeout short. An
+      # UNAVAILABLE Ecobee fails this condition, so the lamp HOLDS: the safe
+      # failure Bill set for a node outage (2026-09-22). Its return to `off`
+      # re-fires the Ecobee trigger above.
+      - condition: state
+        entity_id: binary_sensor.family_mmwave_presence
+        state: "off"
+        for: *mmw_family_off_wait
+      - condition: state
+        entity_id: binary_sensor.main_floor_motion
         state: "off"
     action:
       - service: input_boolean.turn_off
