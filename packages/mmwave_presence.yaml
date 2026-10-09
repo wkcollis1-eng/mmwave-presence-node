@@ -1598,7 +1598,10 @@ automation:
         to: ["unavailable", "unknown"]
         for: &mmw_family_ecobee_grace "00:05:00"
         id: ecobee_lost
-    condition:
+    # `&mmw_family_empty_conds` names this list - the one definition of "the
+    # room is empty" - so mmw_family_override_release below reuses it rather
+    # than keeping a second copy (2026-10-09, R10).
+    condition: &mmw_family_empty_conds
       - condition: state
         entity_id: input_boolean.mmw_family_auto_enable
         state: "on"
@@ -1681,6 +1684,63 @@ automation:
       - service: input_boolean.turn_off
         target:
           entity_id: input_boolean.mmw_family_latch
+
+  # ADDED 2026-10-09 (Bill: "Needs to be able to clear itself").
+  # WHY: the override is cleared by ONE thing, step 1 of
+  # mmw_family_presence_off, which runs only on an EDGE (radar on->off, or
+  # Ecobee on->off) and only behind that automation's conditions. A missed
+  # edge leaves the override ON until the next qualifying edge, with nothing
+  # said anywhere, and presence_on and dusk_on both need it OFF
+  # (&mmw_family_light_on_conds). It happened: mmw_family_presence_off went
+  # `unavailable` at 2026-10-08 22:04:35 UTC (HA 2026.10.0 rejects `for` with
+  # a list of states) and stayed so for 15 h 9 m 43 s [D]; the lamps were
+  # switched off by hand at 01:19:53 UTC, mmw_family_override_detect set the
+  # override, and no later edge could clear it. 5 of 5 stored presence_on
+  # traces (12:03-14:30 UTC) stopped at condition/1, override "on" where "off"
+  # was wanted [M, trace/list, 2026-10-09].
+  # WHAT: a LEVEL test instead of an edge. Whenever the override is on AND the
+  # room is empty by the definition mmw_family_presence_off uses (the anchor:
+  # same radar wait, same Ecobee grace, same alarm and idle-timeout guards),
+  # clear it. Two triggers: the override turning on (it can be set while the
+  # room is already empty, and then no edge is coming) and a sweep (the net
+  # for an edge missed while an automation was down or HA was restarting).
+  # This is NOT the timer the helper's comment forbids: nothing here counts
+  # time. A person in the room (radar on, or Ecobee on) holds the override
+  # exactly as before; the sweep only sets how soon a LEVEL is noticed.
+  # 5 minutes is a CHOICE, not a measurement: it matches the Ecobee grace, and
+  # a run that finds the override off stops at condition/0.
+  # The lamps are not touched: mmw_family_presence_off still owns lamp-off.
+  # Neither trigger id is `ecobee_quiet`, so the blip filter that comes with
+  # the anchor passes without reading `trigger.from_state`.
+  - id: mmw_family_override_release
+    alias: "mmW Family: release a stale override"
+    mode: single
+    max_exceeded: silent
+    trigger:
+      - platform: state
+        entity_id: input_boolean.mmw_family_manual_override
+        to: "on"
+        id: override_set
+      - platform: time_pattern
+        minutes: "/5"
+        seconds: 17
+        id: sweep
+    condition:
+      - condition: state
+        entity_id: input_boolean.mmw_family_manual_override
+        state: "on"
+      - condition: and
+        conditions: *mmw_family_empty_conds
+    action:
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.mmw_family_manual_override
+      - service: logbook.log
+        data:
+          name: "mmW Family"
+          message: >
+            stale manual override released ({{ trigger.id }}): the room is
+            empty (radar off, Ecobee quiet)
 
   - id: mmw_family_override_detect
     alias: "mmW Family: detect manual intervention"
