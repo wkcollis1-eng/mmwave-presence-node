@@ -1174,14 +1174,18 @@ automation:
         # SPENT when this trigger fires. Waiting the full room timeout here on
         # top of it would double-count and A5 would fail with both files
         # looking correct. Subtract, floor at zero.
-        for: >
+        # `&mmw_office_off_wait` names this wait so mmw_office_override_release
+        # below reuses it rather than recomputing it (2026-10-09, R10).
+        for: &mmw_office_off_wait >
           {# CHANGED 2026-09-22: float(90) -> float(0); the 90 was a second
              copy of the starting value (R10). 0 is refused below. #}
           {% set total = states('input_number.mmw_office_idle_timeout') | float(0) %}
           {% set mod   = states('number.office_mmwave_radar_timeout') | float(30) %}
           {% set w     = [total - mod, 0] | max | int(0) %}
           {{ '%02d:%02d:%02d' % (w // 3600, (w % 3600) // 60, w % 60) }}
-    condition:
+    # `&mmw_office_empty_conds` names this list so mmw_office_override_release
+    # below reuses it rather than keeping a second copy (2026-10-09, R10).
+    condition: &mmw_office_empty_conds
       - condition: state
         entity_id: input_boolean.mmw_office_auto_enable
         state: "on"
@@ -1207,6 +1211,63 @@ automation:
       - service: input_boolean.turn_off
         target:
           entity_id: input_boolean.mmw_office_latch
+
+  # ADDED 2026-10-09 (Bill: "make the change to the office"). The family room
+  # had this defect: the override is cleared by ONE thing, step 1 of
+  # mmw_office_presence_off, which runs only on an EDGE (radar on->off, held
+  # for the wait), so an edge that passes while that automation is down leaves
+  # the override ON until the next one, and presence_on and lux_dim_on both
+  # need it OFF. The family evidence is a 15 h 9 m 43 s outage that did exactly
+  # that [D, see the family release below and CHANGELOG 2026-10-09]. The office
+  # has NOT been seen stuck [M, none recorded]: this is the same structure, read
+  # in the code, not a second incident.
+  # WHAT: a LEVEL test. Whenever the override is on AND the room is empty by the
+  # definition mmw_office_presence_off uses - its conditions by the anchor, and
+  # the radar `off` for its wait by the anchor on its `for:` - clear it. The
+  # office has no second witness, so "empty" here is the radar alone. It is the
+  # RAW radar (not "mmW Office occupied"), as in presence_off: a person in the
+  # bathroom next door holds the override. An unavailable radar fails the
+  # condition, so the override holds through a node outage - the same rule as
+  # the lamp (Bill 2026-09-22).
+  # Triggers: the override turning on (it can be set into an already-empty room,
+  # and then no edge is coming) and a sweep (the net for an edge missed while an
+  # automation was down). Not the timer the helper's comment forbids: nothing
+  # here counts time, and a person at the desk holds the override as before.
+  # 5 minutes is a CHOICE, not a measurement. :47 keeps it off the family's :17.
+  # The lamp is not touched: mmw_office_presence_off still owns lamp-off.
+  - id: mmw_office_override_release
+    alias: "mmW Office: release a stale override"
+    mode: single
+    max_exceeded: silent
+    trigger:
+      - platform: state
+        entity_id: input_boolean.mmw_office_manual_override
+        to: "on"
+        id: override_set
+      - platform: time_pattern
+        minutes: "/5"
+        seconds: 47
+        id: sweep
+    condition:
+      - condition: state
+        entity_id: input_boolean.mmw_office_manual_override
+        state: "on"
+      - condition: and
+        conditions: *mmw_office_empty_conds
+      - condition: state
+        entity_id: binary_sensor.office_mmwave_presence
+        state: "off"
+        for: *mmw_office_off_wait
+    action:
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.mmw_office_manual_override
+      - service: logbook.log
+        data:
+          name: "mmW Office"
+          message: >
+            stale manual override released ({{ trigger.id }}): the room is
+            empty (radar off for the idle timeout)
 
   # ---- R4a: manual override detection --------------------------------------
   - id: mmw_office_override_detect
