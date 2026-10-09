@@ -507,6 +507,8 @@ template:
       # CANDIDATE, not proof. The thermostat is somewhere on the floor, not in
       # this room, and its occupancy holds long after the person walked out. A
       # hit here means "go and look at the trace", never "the radar is broken".
+      # Its notification (mmw_dropout_candidate_alert) is OFF since 2026-10-04;
+      # this sensor still records. Read it in history, not from the bell.
       - name: "mmW Family dropout candidate"
         unique_id: mmw_family_dropout_candidate
         device_class: problem
@@ -1943,6 +1945,32 @@ automation:
   - id: mmw_dropout_candidate_alert
     alias: "mmW: radar says empty, thermostat says occupied"
     mode: single
+    # OFF 2026-10-04 (Bill: "lets do fix 1 and 2"), the same way and for the
+    # same reasons as mmw_label_contradicted_alert above. The witness cannot
+    # separate a dropout from a person in the kitchen: the thermostat is 6-8 ft
+    # from the kitchen work area and the radar is blind to the kitchen (see the
+    # ecobee_quiet note in the lamp section). 09-26 20:00 to 10-04 19:00 EDT
+    # [M, HA history]: 30 firings, 10-02 11:31 to 10-04 17:33. The occupancy it
+    # leans on holds 25.0-25.1 min after the last motion (n=42), longer than the
+    # 10-min delay_on; it stuck on with no motion 8 times for 28.3 h in all,
+    # three of them overnight, and 6 firings were re-arms exactly 10.0 min after
+    # an ~80 ms HomeKit blip from the watchdog reload (fixed the same day in
+    # packages/watchdog.yaml). The 2 clusters examined were walk-throughs, not
+    # dropouts; the other 28 firings were not examined.
+    # binary_sensor.mmw_family_dropout_candidate still records every interval.
+    # R13, same day: the proposal said "until §5.2a closes the kitchen gap".
+    # It cannot. The kitchen work area is 7.56 m and more from the hearth front
+    # (open_questions.yaml, the 2026-10-02 A101 answer), past anything this
+    # radar reports: moving targets top out at 600 cm (236 in) and still ones
+    # at 637 cm (251 in) [M: n=101,296 and n=122,835, 10-02 14:03 to 10-04
+    # 22:59 EDT], with both max gates at 8. ESPHome publishes the module's own
+    # distance unscaled [S: ESPHome 2026.9.0 components/ld2410/ld2410.cpp,
+    # encode_uint16 of the frame bytes], so that ceiling is the module's.
+    # Corrected the same evening (Bill, "236 inches"): this first said "the
+    # 6.75 m end of gate 8". That is 9 gates x 0.75 m [D], the most gate 8
+    # could span, never a measured range. Turn this back on only with a
+    # witness that cannot see the kitchen.
+    initial_state: false
     trigger:
       - platform: state
         entity_id:
