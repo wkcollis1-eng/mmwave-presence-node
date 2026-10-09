@@ -1637,9 +1637,26 @@ automation:
           - condition: state
             entity_id: binary_sensor.main_floor_motion
             state: "off"
+          # CHANGED 2026-10-09 (R13, mine): was ONE condition with
+          # `state: ["unavailable", "unknown"]` + `for:`. HA 2026.10.0 rejects
+          # `for` with a list of states ("Cannot use 'for' with a list of
+          # states" [S: core 2026.10.0 helpers/config_validation.py
+          # STATE_CONDITION_SCHEMA]; 2026.9.4 had no such rule) and the whole
+          # automation went `unavailable` at 2026-10-08 22:04 UTC, the update
+          # restart - so no lamp-off ran from then. check_config said "valid"
+          # throughout: conditions are validated when the automation sets up,
+          # not by check_config. Split in two, same `for:` by the anchor (R10).
+          # Equivalent at runtime: the old condition was true when the state
+          # was in the list and last_changed was older than `for` [S: core
+          # 2026.10.0 helpers/condition.py state()], so an unavailable ->
+          # unknown flip restarted the wait before and restarts it now.
           - condition: state
             entity_id: binary_sensor.main_floor_motion
-            state: ["unavailable", "unknown"]
+            state: "unavailable"
+            for: *mmw_family_ecobee_grace
+          - condition: state
+            entity_id: binary_sensor.main_floor_motion
+            state: "unknown"
             for: *mmw_family_ecobee_grace
       # ADDED 2026-10-02: the blip filter (see the DEFECT note on the
       # `ecobee_quiet` trigger). A return from `unavailable` counts only if
