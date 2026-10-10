@@ -570,7 +570,27 @@ template:
         # so the automations refuse to act (see input_number). NODE_OFFLINE -
         # presence unknown/unavailable; the lamp holds whatever it was
         # (Bill 2026-09-22). Before this, an offline node read EMPTY_LIT.
+        # CHANGED 2026-10-09 (Bill: "dashboard will say empty/dark while
+        # lights are still on"): two states for radar-off with a lamp on, which
+        # read EMPTY_DARK/EMPTY_LIT before - 26-128 lamp-on min a day over
+        # 10-03..10-09, before and after the HA update [M: recorder, this
+        # sensor x switch.family_room]. EMPTY was the radar alone, but since
+        # 2026-10-02 the lamp waits for the radar AND the Ecobee; DARK was raw
+        # lux, and the lamps lift this sensor ~7.3 lx [M, n=1 off-edge,
+        # 10-10 01:12 UTC] against a 24 lx setpoint.
+        #   HOLDING         latched lamp, auto on: mmw_family_presence_off will
+        #                   switch it off when its conditions hold - usually the
+        #                   Ecobee's ~5 min tail. Keyed on the latch, not the
+        #                   Ecobee, so "empty" stays defined once (R10). HOLDING
+        #                   long after the Ecobee goes quiet = lamp-off is not
+        #                   running (the 2026-10-08 failure).
+        #   LAMP_ON_MANUAL  lamp on, not latched (lit by hand) or auto off:
+        #                   NOTHING will switch it off.
+        # The lux states below now describe a room with every lamp off.
         state: >
+          {% set lamp_on = is_state('switch.family_room','on')
+                or is_state('switch.family_room_2','on')
+                or is_state('switch.family_room_3','on') %}
           {% if states('input_number.mmw_family_lux_on') | float(0) <= 0
                 or states('input_number.mmw_family_idle_timeout') | float(0) <= 0 %}
             UNCOMMISSIONED
@@ -578,6 +598,11 @@ template:
             NODE_OFFLINE
           {% elif is_state('binary_sensor.family_mmwave_presence','on') %}
             OCCUPIED
+          {% elif lamp_on and is_state('input_boolean.mmw_family_latch','on')
+                  and is_state('input_boolean.mmw_family_auto_enable','on') %}
+            HOLDING
+          {% elif lamp_on %}
+            LAMP_ON_MANUAL
           {% elif is_state('binary_sensor.family_mmwave_lux_stale','on') %}
             EMPTY_LUX_UNKNOWN
           {% elif states('sensor.family_mmwave_ambient_light') | float(999)
