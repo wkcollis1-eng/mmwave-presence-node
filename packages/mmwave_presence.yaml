@@ -114,6 +114,11 @@ input_boolean:
   # presence edge (mmw_family_presence_on) and the darkening room
   # (mmw_family_dusk_on). Both light the lamp the same way and set this,
   # so the empty-room automation releases a lamp that either one lit.
+  # CHANGED 2026-10-11 (Bill): the family latch no longer gates lamp-off -
+  # mmw_family_presence_off switches off every family lamp that is on once
+  # the room is empty, latched or not. It still marks a lamp this automation
+  # lit, which the state sensor reports as HOLDING, not LAMP_ON_MANUAL. The
+  # office latch is unchanged.
   mmw_family_latch:
     name: "Family Room: lamp latched by presence"
     icon: mdi:lock-check
@@ -1761,9 +1766,26 @@ automation:
       - service: input_boolean.turn_off
         target:
           entity_id: input_boolean.mmw_family_manual_override
-      - condition: state
-        entity_id: input_boolean.mmw_family_latch
-        state: "on"
+      # CHANGED 2026-10-11 (Bill: "need to have the automation honor manual
+      # lamps on, but turn off when room is empty"): was `condition: state`
+      # on mmw_family_latch "on", so a lamp lit by hand was never switched off
+      # here (design §4.2 rule 2). That day three lamps lit by hand at 12:53
+      # EDT stayed on 57-66 min after this automation released the override
+      # at 16:14, until they were switched off by hand [D: lamps off
+      # 21:11:41 and 21:19:59 UTC minus release 20:14:08 UTC, logbook]. Now
+      # ANY family lamp that is on goes off once the room is empty by the
+      # conditions above. A hand press while the room is occupied still sets
+      # the override and is still not fought; only the release is new. Lux
+      # never switches a lamp off, so this cannot start the §4.2 loop the
+      # latch was written for. The latch no longer gates anything here; the
+      # state sensor still reads it (HOLDING vs LAMP_ON_MANUAL). To keep a
+      # lamp on in an empty room, turn "Automatic lighting" off: the first
+      # condition above then holds every lamp.
+      - condition: template
+        value_template: >
+          {{ is_state('switch.family_room','on')
+             or is_state('switch.family_room_2','on')
+             or is_state('switch.family_room_3','on') }}
       - service: script.mmw_family_lamp_set
         data:
           lamp_state: "off"
