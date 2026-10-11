@@ -681,6 +681,17 @@ template:
   # Rendering on a flag change would pair a fresh flag with the previous
   # frame's distance - Bill's last seated distance with a bathroom target, say.
   # It is also exactly how the figures above were measured.
+  # CORRECTED 2026-10-11 (R13; P24 asked for it at the next package edit):
+  # "that frame's own" holds only if the flag has not changed in the last
+  # second. ESPHome puts `settle: 1000ms` on every ld2410 binary sensor
+  # (esphome/mmwave-bench.yaml, DEFAULT FILTER): a change publishes at once,
+  # then later changes are held for 1 s, so a flag that flips back inside
+  # that second reaches HA late, and a distance update in between pairs with
+  # the held flag. The symptom, from P24: the gate skipped readings while
+  # "Moving target" read off on 8 of 47 throttled-era on-edges [M],
+  # 0.117-1.103 s, once 12.502 s [M]. Radar bit or settle is not separable
+  # in HA history [I]; the 12.502 s skip is not settle's [D: settle holds a
+  # change for at most 1 s].
   #
   # FAILS OPEN: an unrecognised distance unit, or no numeric distance at all
   # (entities disabled, node just booted), makes this follow radar presence -
