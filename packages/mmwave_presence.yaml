@@ -2351,6 +2351,17 @@ automation:
 #     unmeasured; the office pair ran 33,144 rows/day [M, above]. Recording
 #     starts at the first HA restart after the edit: recorder config does
 #     not reload.
+#   * CHANGED 2026-10-11: all four distances EXCLUDED again (Bill 2026-10-11:
+#     "tuning done for both the office and family mmWave so we can exclude").
+#     The two bullets above are history now, not the current state. Cost
+#     they ran at: 360,120 rows/day for the four [M: InfluxDB point count,
+#     7 d to 2026-10-11, one point per state change; the recorder's own count
+#     was not read], the office pair 273,261 of it - up from 33,144 [M,
+#     above] after the 1 s throttle came off on 2026-10-02 (P24: reading gap
+#     median 1.10 s before, 0.18 s after [M]). InfluxDB still takes every
+#     point: it has no entity filter (H:/docs/influx-grafana.md). Rows already
+#     recorded age out with purge_keep_days (14 d). Both "Target distance"
+#     cards left the views with this edit - they would draw nothing.
 # Explicit ids, not a glob: `sensor.*_mmwave_*` would also catch the bench
 # node's sensor.bench_mmwave_* series. HA merges a package's
 # recorder.exclude lists into the main recorder config (config.py
@@ -2359,10 +2370,16 @@ recorder:
   exclude:
     entities:
       # office moving/still distance: recorded again, see "NOT excluded" (P24)
+      # - and excluded again 2026-10-11, tuning done (same section):
+      - sensor.office_mmwave_moving_distance
+      - sensor.office_mmwave_still_distance
       - sensor.office_mmwave_detection_distance
       - sensor.office_mmwave_moving_energy
       - sensor.office_mmwave_still_energy
       # family moving/still distance: recorded since 2026-10-02, see "NOT excluded"
+      # - and excluded again 2026-10-11, tuning done (same section):
+      - sensor.family_mmwave_moving_distance
+      - sensor.family_mmwave_still_distance
       - sensor.family_mmwave_detection_distance
       - sensor.family_mmwave_moving_energy
       - sensor.family_mmwave_still_energy

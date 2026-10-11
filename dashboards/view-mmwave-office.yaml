@@ -180,19 +180,16 @@ sections:
           - entity: sensor.office_mmwave_ambient_light
             name: Lux
 
+      # REMOVED 2026-10-11 (Bill: "tuning done for both the office and family
+      # mmWave so we can exclude"): the "Target distance (P24 tuning)"
+      # history-graph this note was written for. Both distances are
+      # recorder-excluded again (package recorder block); git holds the card.
+      # Its note, kept:
       # ADDED 2026-09-28 for the P24 tuning (Bill: "we need the 2 distance
       # readings for tuning"). Both update with engineering mode off. 2 h,
       # like the gate graphs, because both series are dense. REMOVE THIS CARD
       # when the tuning closes and the two series are excluded from the
       # recorder again - after that it draws nothing.
-      - type: history-graph
-        hours_to_show: 2
-        title: Target distance (P24 tuning)
-        entities:
-          - entity: sensor.office_mmwave_moving_distance
-            name: Moving
-          - entity: sensor.office_mmwave_still_distance
-            name: Still
 
       - type: history-graph
         hours_to_show: 2

@@ -297,14 +297,10 @@ sections:
       # recorded only from the first HA restart after this date (package
       # recorder block, "NOT excluded"); until then the card draws the current
       # value alone. 2 h, like the gate graphs below.
-      - type: history-graph
-        hours_to_show: 2
-        title: Target distance
-        entities:
-          - entity: sensor.family_mmwave_moving_distance
-            name: Moving
-          - entity: sensor.family_mmwave_still_distance
-            name: Still
+      # REMOVED 2026-10-11 (Bill: "tuning done for both the office and family
+      # mmWave so we can exclude"): the "Target distance" history-graph the
+      # note above was written for. Both distances are recorder-excluded again
+      # (package recorder block); git holds the card.
 
       - type: history-graph
         hours_to_show: 2
