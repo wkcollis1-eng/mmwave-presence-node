@@ -545,6 +545,8 @@ template:
         # approach inside 70 in: the bathroom next door, or someone who stayed
         # in the doorway. The lamp logic treats it as empty; see "mmW Office
         # occupied".
+        # CHANGED 2026-10-16: the approach limit is 82 in, not 70 (see "mmW
+        # Office occupied").
         state: >
           {% if states('input_number.mmw_office_lux_on') | float(0) <= 0
                 or states('input_number.mmw_office_idle_timeout') | float(0) <= 0 %}
@@ -670,6 +672,23 @@ template:
   # presence is on. Once started it HOLDS on anything radar presence holds on,
   # the doorway included, and it ends when radar presence ends. Evidence,
   # limits and falsifier: P24 in H:/docs/pending.md.
+  # CHANGED 2026-10-16: approach_in 70 -> 82 (Bill 2026-10-16: "increase the
+  # light on distance threshold from 70 to just under the minimum bathroom
+  # value"). Bathroom nearest on the unthrottled stream: 83.46 in on the
+  # labelled run of 2026-10-02 [M: 207 readings, 4 trips], and 82.28 in on an
+  # unlabelled 60 s DETECTED_FAR episode at 2026-10-10 17:43:52Z with a
+  # bathroom trip's shape [M; what it was is not known, I]. 82 is under both.
+  # Replay of this rule over InfluxDB, 2026-10-02 13:14Z..10-16 16:01Z, which
+  # matches the deployed sensor on 128 of 129 starts within 0.49 s [M]: at 82,
+  # 0 new starts among the 42 presence episodes that never reached 70, and
+  # starts a median 0.20 s sooner, P75 0.30 s, max 8.61 s [M, n=129]; at 83
+  # the 10-10 episode starts [M]. The margin is 1 cm: the node reports whole
+  # cm, 82 in admits up to 208 cm, and the 10-10 nearest was 209 cm [D: x 2.54].
+  # The cost, accepted with the request: a future far episode reads nearer
+  # than all 40 measured with probability 1/41 [D, order statistics; I that
+  # episodes are exchangeable], about 1.0 start in an empty office per 14 days
+  # at 2.8 far episodes a day [D]. Scored in the ledger row 2026-10-16 in
+  # H:/CHANGELOG.md.
   #
   # FAILURE MODES, accepted: someone who only ever stands in the doorway never
   # starts it; a bathroom trip straight after leaving the office holds it, and
@@ -721,7 +740,7 @@ template:
         availability: >
           {{ states('binary_sensor.office_mmwave_presence') not in ['unknown','unavailable'] }}
         state: >
-          {% set approach_in = 70 %}
+          {% set approach_in = 82 %}
           {% set per_in = {'in': 1.0, 'cm': 0.393701, 'mm': 0.0393701,
                            'm': 39.3701, 'ft': 12.0} %}
           {% set md = 'sensor.office_mmwave_moving_distance' %}
@@ -769,6 +788,9 @@ template:
   # over n=11 walk-ins, 2026-09-26..27]. Expect that step in the trend; it is
   # the filter's cost, not a drift. A start 10 s or more after the radar edge
   # is not counted.
+  # FROM 2026-10-16 the limit is 82 in, and starts come a median 0.20 s
+  # sooner [M: replay over InfluxDB, n=129 starts, 2026-10-02..16]: expect at
+  # most a small step down in this trend.
   - trigger:
       - platform: state
         entity_id: switch.office_lamp
