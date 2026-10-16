@@ -44,11 +44,11 @@ every threshold, and the measurements that set them, are in
 
 | | |
 |---|---|
-| Design document | **Rev 1.8**, October 2026 |
+| Design document | **Rev 1.9**, October 2026 |
 | PCB | **Fabricated and populated.** 44.0 × 33.0 mm, 2-layer, three built |
 | Bench validation | First session against real hardware **2026-09-07** — seven corrections and one retraction folded back into Rev 1.6. **14.5 days of bench data reviewed 2026-09-22** — folded into Rev 1.7 |
 | Firmware / HA config | **Deployed.** Both nodes run firmware 0.4. The whole package (office and family room) is live in Home Assistant, derived from `packages/mmwave_presence.yaml` |
-| Deployment | **Office live since 2026-09-26, family room since 2026-10-02.** First production review 2026-10-16, folded into Rev 1.8 |
+| Deployment | **Office live since 2026-09-26, family room since 2026-10-02.** First production review 2026-10-16, folded into Rev 1.8. A lamp lit into an empty room goes off after 5 min, from Rev 1.9 (2026-10-16) |
 | Latency (R2) | **Family room: median 0.386 s, P95 0.409 s, n=103** [M] (HA's timestamps, presence edge → lamp relay on; not photons). **Office: median 2.404 s, P95 6.769 s, n=68** [M]. That is not met by design: the office lamp waits until the person is inside the approach limit, so a walk from the doorway is in the figure. Before that filter it was median 0.387 s, n=25 [M] — design doc §8 |
 | Known fault | **The office node loses power every night**, about 23:30 to 07:00 [M: 13 nights, 09-29 → 10-12], and was dark for 79.66 h on 10-12 → 10-15 [M]. Under the §7 "lamp stays on while the node is offline" rule, the lamp stayed lit through 6 of those nights, 47.06 h in all [M]. Cause (owner, 2026-10-16): the node's outlet strip is fed by the Kasa computer outlet, which goes off overnight; the outlet's off-spans match all 14 dark gaps [M]. The remedy is the owner's call — design doc §9 item 16 |
 

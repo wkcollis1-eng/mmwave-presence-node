@@ -107,6 +107,10 @@ input_boolean:
   # THE LATCH (§4.2). True only when THIS automation turned the lamp on. The
   # off-automation refuses to touch a lamp it did not switch on, which is what
   # keeps it from switching off a lamp a human turned on.
+  # CHANGED 2026-10-16 (Bill): one exception in the office - a lamp lit while
+  # the office ALREADY reads empty, and left so for 5 min, is switched off by
+  # mmw_office_lit_empty_off. A lamp a person lights in the room is still
+  # never touched.
   mmw_office_latch:
     name: "Office: lamp latched by presence"
     icon: mdi:lock-check
@@ -593,6 +597,11 @@ template:
         #                   running (the 2026-10-08 failure).
         #   LAMP_ON_MANUAL  lamp on, not latched (lit by hand) or auto off:
         #                   NOTHING will switch it off.
+        #                   CORRECTED 2026-10-16: with auto on, stale since
+        #                   10-11 - mmw_family_presence_off switches it off
+        #                   when the room empties, and from 10-16
+        #                   mmw_family_lit_empty_off after 5 min in a room
+        #                   that already reads empty. Auto off still holds it.
         # The lux states below now describe a room with every lamp off.
         state: >
           {% set lamp_on = is_state('switch.family_room','on')
@@ -1332,6 +1341,73 @@ automation:
             stale manual override released ({{ trigger.id }}): the room is
             empty (radar off for the idle timeout)
 
+  # ADDED 2026-10-16 (Bill: "Package should turn off lamps that come on with no
+  # one present"). The office counterpart of mmw_family_lit_empty_off, and
+  # narrower, because the office keeps §4.2 rule 2: a lamp a person lights
+  # while in the room is never switched off by the package (the latch). Only a
+  # lamp lit while the office ALREADY reads empty, and left so for the grace,
+  # goes off: the lamp on for 5 min AND the raw radar off for at least those
+  # 5 min - off since before the lamp came on.
+  # Not seen yet [M, logbook]: 0 of 9 office lamp-ons made outside HA
+  # (09-26..10-16) came into an office the radar read empty - 4 while the node
+  # was dark, 5 with the radar on. The replay [D] acts on 0 of 76 lamp-on
+  # spans, 10-02..10-16.
+  # NO SWEEP, unlike the family: a restart resets both last_changed, and a
+  # sweep would then switch off a rule-2 lamp lit by someone who has since
+  # left. So a reload or restart inside the grace leaves the lamp on - the
+  # safe failure here. Raw radar, as in presence_off: a person in the bathroom
+  # next door holds the lamp, and so does an unavailable radar (the node's
+  # outlet strip is switched off overnight - Bill 2026-10-16). The grace and
+  # the guard are the family's choices, for the family's reasons.
+  - id: mmw_office_lit_empty_off
+    alias: "mmW Office: lamp lit into an empty office -> off"
+    mode: single
+    max_exceeded: silent
+    trigger:
+      - platform: state
+        entity_id: switch.office_lamp
+        # A return from `unavailable` is the plug reconnecting, not the lamp
+        # coming on.
+        from: "off"
+        to: "on"
+        # `&mmw_office_lit_empty_grace` is reused by the radar condition (R10).
+        for: &mmw_office_lit_empty_grace "00:05:00"
+    condition:
+      - condition: and
+        conditions: *mmw_office_empty_conds
+      - condition: state
+        entity_id: binary_sensor.office_mmwave_presence
+        state: "off"
+        for: *mmw_office_lit_empty_grace
+    action:
+      # THE GUARD - see mmw_family_lit_empty_off.
+      - if:
+          - condition: template
+            value_template: >
+              {% set stamp = as_timestamp(states('input_datetime.mmw_office_last_cmd'), 0) %}
+              {% set d = as_timestamp(states.switch.office_lamp.last_changed, 0) - stamp %}
+              {{ is_state('input_boolean.mmw_office_latch', 'off') and 0 <= d <= 120 }}
+        then:
+          - service: logbook.log
+            data:
+              name: "mmW Office"
+              message: >
+                lamp switched back on within 120 s of the package's own command,
+                in an office that reads empty - left on, not fought
+          - stop: "a correction of the package"
+      - service: script.mmw_office_lamp_set
+        data:
+          lamp_state: "off"
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.mmw_office_latch
+      - service: logbook.log
+        data:
+          name: "mmW Office"
+          message: >
+            lamp lit into an empty office (radar off since before it came on)
+            switched off after 5 min
+
   # ---- R4a: manual override detection --------------------------------------
   - id: mmw_office_override_detect
     alias: "mmW Office: detect manual intervention"
@@ -1882,6 +1958,124 @@ automation:
           message: >
             stale manual override released ({{ trigger.id }}): the room is
             empty (radar off, Ecobee quiet)
+
+  # ADDED 2026-10-16 (Bill: "Package should turn off lamps that come on with no
+  # one present"). The gap the 10-11 change left open: lamp-off is EDGE-
+  # triggered (radar or Ecobee on->off), so a lamp lit while the room already
+  # reads empty gets no edge and stays on. It happened: a Kasa app dusk
+  # schedule (Bill 2026-10-16) lit all three lamps into a house the radar had
+  # read empty for 9 to 57 h, at 18:14, 18:12 and 18:11 EDT on 10-12, 10-13
+  # and 10-14, and they stayed on 67-192 min until Bill switched them off
+  # from away [M, logbook + recorder]. Bill is removing that schedule; this is
+  # for the next lamp lit from outside HA - an app tap, a schedule, anything.
+  # WHAT: a LEVEL test. A lamp on for the grace AND the room empty by
+  # mmw_family_presence_off's own definition (the anchor: same radar wait,
+  # Ecobee grace, alarm and idle-timeout guards - R10) -> lamps off, stamped.
+  # Triggers: a lamp switching on from `off`, held for the grace; and a sweep,
+  # the net for a grace timer that an automation reload or an HA restart
+  # cancelled, and for an edge presence_off missed while it was down - but NOT
+  # one it missed because these shared conditions failed to load, as on 10-08:
+  # this automation reads the same list and would fail with it.
+  # THE GRACE, 5 min, is a CHOICE, not a measurement: time for someone who
+  # lights the room from the app before walking in to get there.
+  # THE GUARD. A lamp switched back on within 120 s after the package's own
+  # command, with the latch off, is a correction of the package: it is left
+  # on, never fought. On 10-05, 10-06 and 10-09 presence_off switched the
+  # lamps off when the Ecobee went quiet; all three were back on 9.8 s, 14.5 s
+  # and 15.3 s later, with no HA context [M, logbook], and the Ecobee saw
+  # motion 2.5, 0.7 and 4.9 min after that [M, logbook]. 120 s is a CHOICE,
+  # above all three. Without the guard this would switch them off again 5 min
+  # later, and after every re-light. An exempt lamp waits for the next empty
+  # edge, as every lamp did before this automation. LIMIT: a person both
+  # sensors miss who re-lights after more than 120 s gets the lamps switched
+  # off again 5 min later, each time logged.
+  # REPLAY [D: recorder 10-02 04:19 -> 10-16 17:58 EDT, today's settings]: it
+  # acts on 10-12, 10-13 and 10-14 at 5.0 min and exempts 10-06 and 10-09.
+  # Of the other 125 lamp-on spans it acts on three [D], all before today's
+  # code: two lit by hand before 10-11 (the kind the 10-11 change switches off
+  # at the empty edge), and the 10-08 outage above.
+  - id: mmw_family_lit_empty_off
+    alias: "mmW Family: lamps on in an empty room -> off"
+    mode: single
+    max_exceeded: silent
+    trigger:
+      - platform: state
+        entity_id: [switch.family_room, switch.family_room_2, switch.family_room_3]
+        # A return from `unavailable` is a plug reconnecting, not a lamp
+        # coming on; the sweep covers a lamp that was on across it.
+        from: "off"
+        to: "on"
+        # `&mmw_family_lit_empty_grace` is reused by the conditions below (R10).
+        for: &mmw_family_lit_empty_grace "00:05:00"
+        id: lamp_on
+      # :32 keeps it off the release's :17.
+      - platform: time_pattern
+        minutes: "/5"
+        seconds: 32
+        id: sweep
+    condition:
+      # Some lamp on for the grace. The lamp_on trigger has proved it already;
+      # the sweep has no other test of it.
+      - condition: or
+        conditions:
+          - condition: state
+            entity_id: switch.family_room
+            state: "on"
+            for: *mmw_family_lit_empty_grace
+          - condition: state
+            entity_id: switch.family_room_2
+            state: "on"
+            for: *mmw_family_lit_empty_grace
+          - condition: state
+            entity_id: switch.family_room_3
+            state: "on"
+            for: *mmw_family_lit_empty_grace
+      # Neither trigger id is `ecobee_quiet`, so the blip filter that comes
+      # with the anchor passes without reading `trigger.from_state`.
+      - condition: and
+        conditions: *mmw_family_empty_conds
+    action:
+      # THE GUARD (above). input_datetime.mmw_family_last_cmd is stamped by
+      # every package command, on or off; the latch tells them apart - it is
+      # on after the package lights the lamps and off after it switches them
+      # off (and after any hand press, via override_detect).
+      - if:
+          - condition: template
+            value_template: >
+              {% set stamp = as_timestamp(states('input_datetime.mmw_family_last_cmd'), 0) %}
+              {% set ns = namespace(relit=false) %}
+              {% if is_state('input_boolean.mmw_family_latch', 'off') %}
+                {% for s in expand('switch.family_room', 'switch.family_room_2', 'switch.family_room_3') if s.state == 'on' %}
+                  {% set d = as_timestamp(s.last_changed) - stamp %}
+                  {% if 0 <= d <= 120 %}{% set ns.relit = true %}{% endif %}
+                {% endfor %}
+              {% endif %}
+              {{ ns.relit }}
+        then:
+          # Logged once, at the lamp's own trigger, not every 5 min by the sweep.
+          - if:
+              - condition: template
+                value_template: "{{ trigger.id == 'lamp_on' }}"
+            then:
+              - service: logbook.log
+                data:
+                  name: "mmW Family"
+                  message: >
+                    lamps switched back on within 120 s of the package's own
+                    command, in a room that reads empty - left on, not fought
+          - stop: "a correction of the package"
+      - service: script.mmw_family_lamp_set
+        data:
+          lamp_state: "off"
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.mmw_family_latch
+      - service: logbook.log
+        data:
+          name: "mmW Family"
+          message: >
+            lamps on 5 min in an empty room (radar off, Ecobee quiet) switched
+            off ({{ trigger.id }})
 
   - id: mmw_family_override_detect
     alias: "mmW Family: detect manual intervention"
