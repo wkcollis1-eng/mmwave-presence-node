@@ -8,7 +8,7 @@
 [![Code: MIT](https://img.shields.io/badge/Code-MIT-blue.svg)](LICENSE-CODE)
 [![Docs: CC BY 4.0](https://img.shields.io/badge/Docs-CC%20BY%204.0-lightgrey.svg)](LICENSE)
 [![PCB](https://img.shields.io/badge/PCB-44%20%C3%97%2033%20mm-blueviolet.svg)](#hardware)
-[![Status](https://img.shields.io/badge/Status-Bench%20validated-yellow.svg)](#status)
+[![Status](https://img.shields.io/badge/Status-Deployed%2C%20two%20rooms-green.svg)](#status)
 [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-EA4AAA.svg?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/wkcollis1-eng)
 
 </div>
@@ -44,12 +44,13 @@ every threshold, and the measurements that set them, are in
 
 | | |
 |---|---|
-| Design document | **Rev 1.7**, September 2026 |
+| Design document | **Rev 1.8**, October 2026 |
 | PCB | **Fabricated and populated.** 44.0 × 33.0 mm, 2-layer, three built |
 | Bench validation | First session against real hardware **2026-09-07** — seven corrections and one retraction folded back into Rev 1.6. **14.5 days of bench data reviewed 2026-09-22** — folded into Rev 1.7 |
-| Firmware / HA config | **Rev 0.2, 2026-09-22.** Both node configs compile on ESPHome 2026.9.0 (`main.cpp.obj`, 0 errors). The package is parse-clean, and its new templates pass 75 two-direction render tests on the live HA template engine — but it is **not yet deployed**, so nothing has been certified by `check_config` |
-| Latency (R2) | **Not demonstrated.** Bench presence → lamp as HA saw it: median 1.359 s, P95 2.100 s, n=60, against R2's 1.0 s / 1.5 s. Production decides in HA without the bench's 1 s tick and now measures itself — design doc §8 |
-| Deployment | Not yet mounted in either room |
+| Firmware / HA config | **Deployed.** Both nodes run firmware 0.4. The whole package (office and family room) is live in Home Assistant, derived from `packages/mmwave_presence.yaml` |
+| Deployment | **Office live since 2026-09-26, family room since 2026-10-02.** First production review 2026-10-16, folded into Rev 1.8 |
+| Latency (R2) | **Family room: median 0.386 s, P95 0.409 s, n=103** [M] (HA's timestamps, presence edge → lamp relay on; not photons). **Office: median 2.404 s, P95 6.769 s, n=68** [M]. That is not met by design: the office lamp waits until the person is inside the approach limit, so a walk from the doorway is in the figure. Before that filter it was median 0.387 s, n=25 [M] — design doc §8 |
+| Known fault | **The office node loses power every night**, about 23:30 to 07:00 [M: 13 nights, 09-29 → 10-12], and was dark for 79.66 h on 10-12 → 10-15 [M]. Under the §7 "lamp stays on while the node is offline" rule, the lamp stayed lit through 6 of those nights, 47.06 h in all [M]. The cause is not yet known — design doc §9 item 16 |
 
 The most consequential open question is recorded honestly in the design document
 §0: **the 5.6 m detection target and the gate-2 (7.4 ft) cap needed to reject a
