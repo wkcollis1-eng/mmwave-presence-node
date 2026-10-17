@@ -595,6 +595,11 @@ template:
         #                   Ecobee, so "empty" stays defined once (R10). HOLDING
         #                   long after the Ecobee goes quiet = lamp-off is not
         #                   running (the 2026-10-08 failure).
+        #                   CHANGED 2026-10-16: while the dining/kitchen
+        #                   lights are in use, HOLDING lasts until 15 min
+        #                   after the radar and the Ecobee last saw anyone
+        #                   (the kitchen witness); "long after" now means
+        #                   longer than that.
         #   LAMP_ON_MANUAL  lamp on, not latched (lit by hand) or auto off:
         #                   NOTHING will switch it off.
         #                   CORRECTED 2026-10-16: with auto on, stale since
@@ -862,6 +867,98 @@ template:
           {{ (as_timestamp(trigger.to_state.last_changed)
               - as_timestamp(states.binary_sensor.family_mmwave_presence.last_changed))
              | round(3) }}
+
+  # ---- the kitchen witness - SEM Dining/Kitchen Lights Energy -------------
+  # ADDED 2026-10-16 (Bill: "Build the circuit-based witness using SEM
+  # Dining/Kitchen Lights Energy"). By Bill's 2026-09-07 rule (design §3.6)
+  # someone in the kitchen counts as the family room occupied. The radar
+  # cannot reach the kitchen working area (island 7.56 m; its last gate ends
+  # at 6.75 m [D: drawing A101]), and the Ecobee, the kitchen's only witness
+  # since 10-02, misses a person there long enough to release the lamps. Of
+  # 102 package lamp-offs 10-02..10-16, 20 were re-lit within 120 s: 16 by
+  # the package (the radar or the Ecobee saw someone again) and 4 by hand or
+  # app - 10-05, 10-06, 10-09 (Bill 2026-10-16: "Most likely moved from the
+  # family room to the kitchen") and 10-16 18:56 [M: recorder; a re-light
+  # with no new mmw_family_last_cmd stamp is not the package's].
+  #
+  # WHAT: two sensors, tested together in &mmw_family_empty_conds - the
+  # lamps HOLD while BOTH are on:
+  #   kitchen lights in use - on at each rise of the circuit's energy total,
+  #     off 10 min after the last rise (auto_off, re-armed by every rise).
+  #   seen recently - on while the radar or the Ecobee reads 'on', and for
+  #     15 min after (delay_off).
+  # The second is the CAP: lights left on cannot hold the lamps longer than
+  # 15 min after anyone was last seen. Over the same 14 days, on three spans,
+  # the circuit was still in use 23, 77 and 91 min after a full 30 min with
+  # neither sensor seeing anyone [M].
+  # THE CIRCUIT IS DINING AND KITCHEN (Bill's choice, 2026-10-16): dining
+  # lights hold the lamps exactly as kitchen lights do.
+  #
+  # THE WINDOW, 10 min [D]: the total counts 1 Wh steps - one per 212 s at
+  # 17 W, one per 64 s at 56 W, the lowest and highest in-use loads seen [M:
+  # recorder, n=3 evenings]. 10 min is about 2.8 steps at 17 W (R18). Gaps
+  # between rises [M, n=1375]: p50 82 s, p90 192 s; 15 fell between 600 and
+  # 1800 s, so a low load can break a span and release the lamps early - the
+  # behaviour before this witness, no worse.
+  # THE CAP, 15 min, is a CHOICE, sized by a replay of those 102 lamp-offs
+  # [D]: the pair would have held 60; in 39 someone was seen again within
+  # the hold (the off and any re-light avoided - all 4 hand/app re-lights
+  # are among them), and 21 went off at most 15.0 min later, 152 min in all.
+  # 10 min: 36 avoided, 24 later, 153 min. 30 min: 41, 19, 168 min.
+  # NOT the Ecobee's own occupancy (R10 considered): main_floor_occupancy
+  # mostly ends 25 min after the motion off-edge [M, p50 25.0, n=71] but
+  # stayed on 546 min past it on 10-02/03 [M] - as a cap it did not cap.
+  # NOT a trigger-armed cap: armed at the Ecobee's off-edge, it would race
+  # mmw_family_presence_off, which fires on that same edge. This one is
+  # already on when the edge comes, so the order does not matter. The
+  # HomeKit blips (off -> unavailable -> off) never make it 'on'.
+  #
+  # FAILURE = THE BEHAVIOUR BEFORE THIS WITNESS. The condition reads "not
+  # both on", so an unknown, unavailable or missing sensor holds nothing. A
+  # frozen or dead SEM feed makes no rises: the witness lapses within 10 min.
+  # A rise needs both ends numeric: a restart (unavailable -> value), a
+  # garbled payload (value -> unknown -> value) or a meter reset (a fall) is
+  # not use, and a trigger the condition rejects renders nothing, so it
+  # cannot cut the timer short [S: core 2026.10.1 template/coordinator.py
+  # 150-158]. Every rise re-arms auto_off, and across a restart it is
+  # restored with the time it had left [S: template/binary_sensor.py
+  # 311-323, 336-407]. "seen recently" restores its state and re-renders, so
+  # a restart can add up to one delay_off to a hold [S: same file, 170-232].
+  - trigger:
+      - platform: state
+        entity_id: sensor.sem_dining_kitchen_lights_energy
+    condition:
+      - condition: template
+        value_template: >
+          {{ trigger.from_state is not none and trigger.to_state is not none
+             and trigger.from_state.state | is_number
+             and trigger.to_state.state | is_number
+             and trigger.to_state.state | float(0)
+                 > trigger.from_state.state | float(0) }}
+    binary_sensor:
+      - name: "mmW Family kitchen lights in use"
+        unique_id: mmw_family_kitchen_lights_in_use
+        icon: mdi:lightbulb-group
+        # Rendered only after the condition passed, so the feed is numeric at
+        # every render; the guard states the source, per the house rule.
+        availability: >
+          {{ states('sensor.sem_dining_kitchen_lights_energy') not in ['unknown','unavailable'] }}
+        state: "true"
+        auto_off: "00:10:00"
+
+  - binary_sensor:
+      - name: "mmW Family seen recently"
+        unique_id: mmw_family_seen_recently
+        icon: mdi:account-clock
+        # Unavailable only when BOTH witnesses are; the radar condition in
+        # &mmw_family_empty_conds then holds the lamps anyway (node offline).
+        availability: >
+          {{ states('binary_sensor.family_mmwave_presence') not in ['unknown','unavailable']
+             or states('binary_sensor.main_floor_motion') not in ['unknown','unavailable'] }}
+        state: >
+          {{ is_state('binary_sensor.family_mmwave_presence','on')
+             or is_state('binary_sensor.main_floor_motion','on') }}
+        delay_off: "00:15:00"
 
 
 # -----------------------------------------------------------------------------
@@ -1798,6 +1895,20 @@ automation:
         to: ["unavailable", "unknown"]
         for: &mmw_family_ecobee_grace "00:05:00"
         id: ecobee_lost
+      # ADDED 2026-10-16: the kitchen witness letting go - lights out for
+      # 10 min, or nobody seen for 15 - releases a lamp it held; without this
+      # the lamp would wait for the next radar or Ecobee edge. It fires on the
+      # PAIR (both on -> not both), never on one sensor's own off-edge: with
+      # the other already off that edge held nothing, and fired it would be a
+      # new empty edge 15 min after every departure, switching off lamps that
+      # today wait for the next radar or Ecobee edge - a hand re-light among
+      # them. `&mmw_family_kitchen_quiet` is the condition below, word for
+      # word (R10).
+      - platform: template
+        value_template: &mmw_family_kitchen_quiet >
+          {{ not (is_state('binary_sensor.mmw_family_kitchen_lights_in_use','on')
+                  and is_state('binary_sensor.mmw_family_seen_recently','on')) }}
+        id: kitchen_quiet
     # `&mmw_family_empty_conds` names this list - the one definition of "the
     # room is empty" - so mmw_family_override_release below reuses it rather
     # than keeping a second copy (2026-10-09, R10).
@@ -1861,6 +1972,13 @@ automation:
             entity_id: binary_sensor.main_floor_motion
             state: "unknown"
             for: *mmw_family_ecobee_grace
+      # ADDED 2026-10-16: the kitchen witness (template block, "mmW Family
+      # kitchen lights in use"). The lamps HOLD while the dining/kitchen
+      # lights are in use AND the radar or the Ecobee saw someone within
+      # 15 min. "Not both on", never "both off": an unknown, unavailable or
+      # missing sensor holds nothing - the behaviour before it existed.
+      - condition: template
+        value_template: *mmw_family_kitchen_quiet
       # ADDED 2026-10-02: the blip filter (see the DEFECT note on the
       # `ecobee_quiet` trigger). A return from `unavailable` counts only if
       # the outage lasted longer than 5 s; the longest blip in 10 days was
