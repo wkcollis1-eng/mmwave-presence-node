@@ -1763,6 +1763,9 @@ automation:
       # below also lights the lamp when an occupied room darkens, and reuses
       # this test by its anchor (R10). Lux still never switches the lamp
       # OFF, which is the oscillation §4.2 guards against.
+      # CHANGED 2026-10-19 (Bill): it does now, mornings only -
+      # mmw_family_daylight_off, behind a margin of the lamps' own measured
+      # lift so their light cannot start that oscillation.
       - &mmw_family_dark_occupied
         condition: template
         value_template: >
@@ -1784,6 +1787,9 @@ automation:
   # This lights the lamp once when an occupied room darkens. ON ONLY, and
   # only while the lamp is off: nothing here switches it off, so the lamp's
   # own light cannot make it oscillate (§4.2).
+  # CHANGED 2026-10-19: mmw_family_daylight_off below now switches the lamps
+  # off on a bright morning. Its line is this one plus the lamps' largest
+  # measured lift plus 5 lx, so its off cannot bring this back on.
   # KNOWN LIMIT: the ceiling fan holds presence on in an empty room (test
   # 2026-10-02), so a fan left running lights an empty room at dusk - the
   # same failure Bill accepted for the lights-off side ("That's a harmless
@@ -1836,6 +1842,104 @@ automation:
       - service: input_boolean.turn_on
         target:
           entity_id: input_boolean.mmw_family_latch
+
+  # ADDED 2026-10-19 (Bill: "turn lights off while occupied when the lux
+  # reading increases above a threshold ie morning is dark and room occupied
+  # with lights on as sun rises lux increases so lights should turn off", then
+  # "only the morning hours. need to exclude the evening hours when other
+  # lights may come on"). The office has had this since 2026-10-02
+  # (mmw_office_lux_bright_off); this is the same rule with the family room's
+  # own lamp lift, and a morning window.
+  #
+  # ONE SETPOINT, input_number.mmw_family_lux_on (24 lx live, 2026-10-19), as
+  # in the office - and the lamps light their own sensor. Three lamps
+  # switched together, kitchen lights steady, no other lamp edge within 60 s:
+  # on-steps +7.5 to +11.3 lx (median +8.2, n=33) and off-steps -6.7 to
+  # -9.4 lx (median -7.5, n=35) after dark; off-steps -6.9 to -10.2 lx in the
+  # morning at 40-55 lx, where the line below sits (n=16) [M: InfluxDB, 10 s
+  # lux, 2026-10-02..10-19]. Larger steps, to 14.7 lx, were all afternoon or
+  # evening with other light in the room, which is what the window excludes.
+  #     off when  lux > lux_on + lamp_lift + deadband      (24 + 12 + 5 = 41)
+  # i.e. daylight ALONE is at least 5 lx above the setpoint, so the lamps
+  # going off cannot take the room back under it and wake mmw_family_dusk_on:
+  # no loop while the real lift stays under 17 lx [D: 12 + 5]. Cost: with the
+  # typical +8.2 lx lift the lamps go off once daylight passes ~33 lx
+  # [D: 41 - 8.2]. Bill's own hand-offs while seated left 19.8, 30.8 and
+  # 29.2 lx of daylight (10-03, 10-06, 10-07) [M, n=3], so this is later
+  # than he would choose. A lower line acts sooner and thins the margin.
+  #
+  # THE WINDOW, sunrise to 12:00, sits INSIDE the trigger template, so the
+  # 5 min counts from the moment all of it is true. As a condition, a trigger
+  # that came true before sunrise (other lights) would have fired and failed
+  # there, and could not fire again until the template went false.
+  #
+  # REPLAY [D: InfluxDB 2026-10-02..10-19, real presence, latch and lux, lux
+  # 24, the lamps' lift taken off after a simulated off]: 2 mornings act
+  # (10-16 11:20, 10-19 08:01 EDT), 1-3 min before the room emptied, and
+  # 0 are re-lit by mmw_family_dusk_on within 60 min at any simulated lift
+  # from 8.2 to 25 lx. Without the window the same line also acted at
+  # 10-10 15:01 EDT. Limits: 17 days, October, one household, and the room
+  # usually empties near 08:00. Falsifier: a daylight-off followed by
+  # mmw_family_dusk_on within 15 min, with no fall in the light outside -
+  # read the lux history across the pair.
+  #
+  # The 5 min dwell is the office's, chosen, not measured. The stamped script
+  # keeps R4a from reading this as a hand at the switch; a hand that puts the
+  # lamps back sets the override as usual, and wins until the room empties.
+  - id: mmw_family_daylight_off
+    alias: "mmW Family: morning daylight -> lights off"
+    mode: single
+    max_exceeded: silent
+    # trigger_variables so the template trigger can read them - the ONE place
+    # these two numbers live for the family room (R10). See the note above.
+    trigger_variables:
+      lamp_lift: 12    # lx: largest measured family step 11.3 after dark, 10.2 mornings [M], rounded up
+      deadband: 5      # lx: chosen, as the office
+    trigger:
+      - platform: template
+        # "Not on" elsewhere, "any on" here: a plug that is unavailable must
+        # not hold the other two on. Fewer lamps lift the sensor less, so the
+        # margin holds.
+        value_template: >
+          {% set s = states('input_number.mmw_family_lux_on') | float(0) %}
+          {% set l = states('sensor.family_mmwave_ambient_light') %}
+          {{ is_state('sun.sun','above_horizon') and now().hour < 12
+             and (is_state('switch.family_room','on')
+                  or is_state('switch.family_room_2','on')
+                  or is_state('switch.family_room_3','on'))
+             and s > 0 and l | is_number
+             and l | float(0) > s + lamp_lift + deadband }}
+        for: "00:05:00"
+    condition:
+      - condition: state
+        entity_id: input_boolean.mmw_family_auto_enable
+        state: "on"
+      # Only lamps this package lit (§4.2). A lamp lit by hand carries the
+      # override and no latch, so a bright morning leaves it alone (Bill
+      # 2026-10-11: "honor manual lamps on"). Every morning lamp span
+      # 10-03..10-19 was package-lit [M, latch on throughout].
+      - condition: state
+        entity_id: input_boolean.mmw_family_latch
+        state: "on"
+      # The alarm owns the lights while it runs, as in mmw_family_presence_off.
+      - condition: state
+        entity_id: input_boolean.mmw_family_alarm_running
+        state: "off"
+      - condition: template
+        value_template: "{{ not is_state('binary_sensor.family_mmwave_lux_stale','on') }}"
+    action:
+      - service: script.mmw_family_lamp_set
+        data:
+          lamp_state: "off"
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.mmw_family_latch
+      - service: logbook.log
+        data:
+          name: "mmW Family"
+          message: >
+            morning daylight: {{ states('sensor.family_mmwave_ambient_light') }} lx
+            with the lamps on, above setpoint + lamp + deadband - lamps off
 
   - id: mmw_family_presence_off
     alias: "mmW Family: empty -> lights off"
@@ -2008,6 +2112,10 @@ automation:
       # state sensor still reads it (HOLDING vs LAMP_ON_MANUAL). To keep a
       # lamp on in an empty room, turn "Automatic lighting" off: the first
       # condition above then holds every lamp.
+      # CHANGED 2026-10-19: "Lux never switches a lamp off" no longer holds
+      # in the morning - mmw_family_daylight_off does, for a lamp the package
+      # lit, behind a margin of the lamps' own lift. The loop stays shut by
+      # that margin, not by this automation.
       - condition: template
         value_template: >
           {{ is_state('switch.family_room','on')
