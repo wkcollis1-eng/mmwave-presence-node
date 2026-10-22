@@ -21,6 +21,8 @@ An **HLK-LD2410C** radar and an **Adafruit VEML7700** light sensor on a **Seeed 
 ESP32-C3** carrier board, running **ESPHome**, with the control logic in **Home
 Assistant**.
 
+![Assembled node: LD2410C radar on the carrier board, VEML7700 on its QT cable, in a clear-lid enclosure](assets/mmWave%20Presence%20Sensor.jpg)
+
 ![Board, top](hardware/mmWave%20Presence%20Lighting%20Node_TOP.png)
 ![Board, bottom](hardware/mmWave%20Presence%20Lighting%20Node_BOTTOM.png)
 ![Board, VEML7700](hardware/Adafruit%20VEML7700%20Lux%20Sensor.png)
@@ -67,6 +69,7 @@ esphome/       Node firmware — common config plus per-node overlays
 packages/      Home Assistant package: the control logic and its helpers
 dashboards/    Home Assistant views for commissioning and monitoring
 scripts/       Calibration and config-checking tools
+assets/        Photos of the built node
 ```
 
 `esphome/`, `packages/`, `dashboards/` and `scripts/` deliberately mirror the
