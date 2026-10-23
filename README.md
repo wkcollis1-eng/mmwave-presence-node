@@ -54,10 +54,17 @@ every threshold, and the measurements that set them, are in
 | Latency (R2) | **Family room: median 0.386 s, P95 0.409 s, n=103** [M] (HA's timestamps, presence edge → lamp relay on; not photons). **Office: median 2.404 s, P95 6.769 s, n=68** [M]. That is not met by design: the office lamp waits until the person is inside the approach limit, so a walk from the doorway is in the figure. Before that filter it was median 0.387 s, n=25 [M] — design doc §8 |
 | Known fault | **The office node loses power every night**, about 23:30 to 07:00 [M: 13 nights, 09-29 → 10-12], and was dark for 79.66 h on 10-12 → 10-15 [M]. Under the §7 "lamp stays on while the node is offline" rule, the lamp stayed lit through 6 of those nights, 47.06 h in all [M]. Cause (owner, 2026-10-16): the node's outlet strip is fed by the Kasa computer outlet, which goes off overnight; the outlet's off-spans match all 14 dark gaps [M]. The remedy is the owner's call — design doc §9 item 16 |
 
-The most consequential open question is recorded honestly in the design document
-§0: **the 5.6 m detection target and the gate-2 (7.4 ft) cap needed to reject a
-person in the next room cannot both hold**, and which of the two is wrong has not
-been decided.
+The design document's §0 recorded what was its most consequential open question:
+**the 5.6 m detection target and the gate-2 (7.4 ft) cap needed to reject a person
+in the next room cannot both hold.** It is closed (owner-confirmed 2026-10-23), and
+neither is kept for the office. The 5.6 m target is a family-room requirement only
+(design doc §3.6); that node runs max gate 8. The office rejects the bathroom next
+door in Home Assistant instead: occupancy starts only on a target reported inside
+82 in (owner, 2026-10-16), live since 2026-09-27 as the P24 filter in
+`packages/mmwave_presence.yaml`. A gate-2 cap was rejected because the doorway
+reads at gate 3 too, so it would read a person standing there as empty. The office
+radar still runs placeholder gates (move 4, still 4) until they are measured at the
+mount (design doc §9 item 11).
 
 ## Repository layout
 
