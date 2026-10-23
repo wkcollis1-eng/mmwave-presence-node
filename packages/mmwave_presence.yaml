@@ -960,6 +960,63 @@ template:
              or is_state('binary_sensor.main_floor_motion','on') }}
         delay_off: "00:15:00"
 
+  # ---- the TV witness - Living Rm TV/Sonos/Homatics plug -------------------
+  # ADDED 2026-10-23 (Bill: "should add another check to use
+  # sensor.living_room_tv_sonos_homatics_current_consumption. ie if TV on
+  # (above 75w?) do not turn off lights. still need to keep the light off if
+  # lux increases").
+  # WHY: the off wait is 0 s - idle timeout 30 s, the radar's own hold 30 s
+  # [M, live 2026-10-23; D: max(30 - 30, 0)] - so a viewer the radar drops
+  # for a few seconds, with the Ecobee quiet, loses the lamps. On 10-22 they
+  # went off at 22:29:14, 22:57:42 and 23:16:00 EDT with the TV on, and
+  # mmw_family_presence_on had them back 3.2, 2.6 and 2.1 s later [M:
+  # logbook]. Of 88 package lamp-offs 10-09..10-23 the TV was on at 16: 11
+  # were re-lit within 120 s (9 by the package, 1.7-99.3 s; 2 by hand, 15.0
+  # and 45.0 s) and 5 were not [D: recorder, this sensor as written]. NOT
+  # that night's last off, 23:34:02: the TV had gone to standby at 23:24:25.
+  #
+  # WHAT: on while the plug reads 50 W or more, and 60 s after (delay_off).
+  # The plug carries the TV, the Sonos and the Homatics box together.
+  # &mmw_family_empty_conds holds the lamps while it is on, so presence_off,
+  # override_release and lit_empty_off all hold with it.
+  # mmw_family_daylight_off does not read that list: the bright-morning off
+  # still acts with the TV on ("still need to keep the light off if lux
+  # increases").
+  # NO CAP (Bill: "if TV on do not turn off lights"): unlike the kitchen
+  # witness, nobody need have been seen. The 5 TV-on offs not re-lit within
+  # 120 s had the radar and the Ecobee both quiet for 5.0-48.4 min, then both
+  # on within 0.2 min of each other [M] - a still viewer, or someone back
+  # from upstairs; the data cannot say which. Held, they are 71.6 lamp-min in
+  # 14.2 days [D: 48.4 + 7.4 + 5.1 + 5.0 + 5.7]. A TV left on in an empty
+  # room holds the lamps until it goes off.
+  #
+  # THE LINE, 50 W, not 75 [M: 14.2 days 10-09..10-23 EDT, 5 s samples,
+  # each span's first and last 60 s left out]:
+  #   standby          5-10 W (75,219 of 116,810 samples)
+  #   background wake  ~4 h after each TV-off, 7.7-8.8 min, p50 40.7-43.1 W,
+  #                    highest sample 45.7 W (24 spans) - nobody watching
+  #   viewing          lowest sample 58.4 W, p1 61.0 W or more (29 spans,
+  #                    30.6-279.8 min)
+  # At 75 W the TV read below the line 2,754 times while on, for up to
+  # 1,255 s; at 50 W, 14 times, for up to 7 s. 50 W sits 4.3 W over the wake
+  # and 8.4 W under viewing [D].
+  # THE DELAY, 60 s, is a CHOICE: a 7 s dip between samples 5 s apart lasted
+  # under 12 s [D], and 60 s is five times that. It is also how long the
+  # lamps stay after the TV goes off before the release (tv_quiet).
+  #
+  # FAILURE = THE BEHAVIOUR BEFORE THIS WITNESS. The condition reads "not
+  # on", so an unknown, unavailable or missing sensor holds nothing. 2
+  # non-numeric samples in the 14.2 days [M].
+  - binary_sensor:
+      - name: "mmW Family TV on"
+        unique_id: mmw_family_tv_on
+        icon: mdi:television
+        availability: >
+          {{ states('sensor.living_room_tv_sonos_homatics_current_consumption') | is_number }}
+        state: >
+          {{ states('sensor.living_room_tv_sonos_homatics_current_consumption') | float(0) >= 50 }}
+        delay_off: "00:01:00"
+
 
 # -----------------------------------------------------------------------------
 # COLLECTION COVERAGE — how much labelled data exists, per class, right now
@@ -2013,6 +2070,14 @@ automation:
           {{ not (is_state('binary_sensor.mmw_family_kitchen_lights_in_use','on')
                   and is_state('binary_sensor.mmw_family_seen_recently','on')) }}
         id: kitchen_quiet
+      # ADDED 2026-10-23: the TV witness letting go - 60 s after the TV goes
+      # off - releases a lamp it held; without this the lamp would wait for
+      # the next radar or Ecobee edge. `&mmw_family_tv_quiet` is the condition
+      # below, word for word (R10).
+      - platform: template
+        value_template: &mmw_family_tv_quiet >
+          {{ not is_state('binary_sensor.mmw_family_tv_on','on') }}
+        id: tv_quiet
     # `&mmw_family_empty_conds` names this list - the one definition of "the
     # room is empty" - so mmw_family_override_release below reuses it rather
     # than keeping a second copy (2026-10-09, R10).
@@ -2083,6 +2148,12 @@ automation:
       # missing sensor holds nothing - the behaviour before it existed.
       - condition: template
         value_template: *mmw_family_kitchen_quiet
+      # ADDED 2026-10-23: the TV witness (template block, "mmW Family TV on").
+      # The lamps HOLD while the TV is on, whoever was last seen. "Not on",
+      # never "off": an unknown, unavailable or missing sensor holds nothing -
+      # the behaviour before it existed.
+      - condition: template
+        value_template: *mmw_family_tv_quiet
       # ADDED 2026-10-02: the blip filter (see the DEFECT note on the
       # `ecobee_quiet` trigger). A return from `unavailable` counts only if
       # the outage lasted longer than 5 s; the longest blip in 10 days was
