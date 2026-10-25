@@ -572,14 +572,36 @@ sensor:
 
   # ---- radar summary -------------------------------------------------------
   - platform: ld2410
+    # CHANGED 2026-10-02 (Bill, P24): `throttle: 1s` removed from the two
+    # distances - the only summary series the P24 filter reads. The driver
+    # publishes only on change, so the throttle passed about one reading a
+    # second of a ~10 Hz stream: the 70 in crossing was seen up to 1 s late,
+    # and a jump-then-hold could be held stale (the R13 note below). Cost:
+    # every change now reaches HA, the recorder AND InfluxDB, which has no
+    # entity filter and keeps everything (docs/influx-grafana.md), so a
+    # recorder exclude will not stop the rows - putting the throttle back
+    # will. The bathroom's nearest 89.0 in (P24) was measured THROUGH the
+    # throttle; it is not established for this stream until re-tested.
+    # Energies and detection_distance keep the throttle: no logic reads them
+    # (recorder-excluded, packages/mmwave_presence.yaml).
+    # CORRECTED 2026-10-02, same day (R13): the comment above was wrong as
+    # first flashed. Leaving `filters:` out does NOT remove the throttle:
+    # ESPHome 2026.9.1 ld2410/sensor.py:37-45 gives these sensors DEFAULT
+    # filters, timeout 1000 ms (last) + throttle_with_priority 1000 ms, and
+    # an absent `filters:` gets them. The old explicit `throttle: 1s` had
+    # been REPLACING that default. Measured after the 12:52:57Z flash: the
+    # smallest gap between moving-distance readings 0.915 s, median 1.10 s
+    # [M, n=213 gaps, 12:52:57-13:02:35Z] - still once a second. My compile
+    # check counted only `ThrottleFilter` in main.cpp and so missed
+    # ThrottleWithPriorityNanFilter. An explicit empty list replaces the
+    # default. Check main.cpp for TimeoutFilterLast and ThrottleWithPriority
+    # too, never ThrottleFilter alone.
     moving_distance:
       name: "Moving distance"
-      filters:
-        - throttle: 1s
+      filters: []
     still_distance:
       name: "Still distance"
-      filters:
-        - throttle: 1s
+      filters: []
     moving_energy:
       name: "Moving energy"
       id: move_energy
