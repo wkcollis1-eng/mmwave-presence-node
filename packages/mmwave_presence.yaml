@@ -136,6 +136,9 @@ input_boolean:
     icon: mdi:lock-check
   # ADDED 2026-10-29: the hallway latch has the OFFICE meaning - lamp-off
   # (mmw_hallway_presence_off) touches only a lamp the package lit.
+  # CHANGED 2026-10-30 (Bill): that now binds presence_off alone.
+  # mmw_hallway_lit_empty_off switches off any lamp once the hallway is empty,
+  # latched or not.
   mmw_hallway_latch:
     name: "Hallway: lamp latched by presence"
     icon: mdi:lock-check
@@ -2660,6 +2663,8 @@ automation:
   # RAW radar presence throughout: the office's "occupied" template exists for
   # a bathroom behind the wall, and nothing is known that the hallway needs one
   # for. No lux_dim_on / lux_bright_off / lit_empty_off: not asked for.
+  # CHANGED 2026-10-30 (Bill): lit_empty_off asked for and added below, a third
+  # difference from the office. Still no lux_dim_on or lux_bright_off.
   - id: mmw_hallway_presence_on
     alias: "mmW Hallway: presence -> lamp on"
     mode: single
@@ -2803,6 +2808,110 @@ automation:
           message: >
             stale manual override released ({{ trigger.id }}): the hallway is
             empty (radar off for the on-time)
+
+  # ADDED 2026-10-30. Bill: "hallway should get the rule that turns off the lamp
+  # when empty room in addition to the 10 minute off after last presense."
+  # THE GAP: a lamp the package did not light had no way off. presence_off
+  # refuses it (the latch) and presence_on cannot light a lamp already on, so
+  # one hand-lit lamp also stopped the automation. It happened at once: lit
+  # from the HA UI in commissioning with the radar on, and on from 10-29
+  # 22:08:57 to 10-30 09:49:01 EDT, 11.7 h [D], through 57 min of radar `off`
+  # [M, recorder, 22:34:53 -> 23:31:54, when the node lost power].
+  # WHAT: the FAMILY's rule (mmw_family_lit_empty_off), not the office's. The
+  # office's acts only if the radar was off BEFORE the lamp came on, which would
+  # not have caught that lamp. A LEVEL test: the lamp on for the grace AND the
+  # hallway empty by presence_off's own definition (the anchors, R10: the same
+  # radar wait, so no lamp goes off sooner than the on-time) -> lamp off,
+  # stamped, latched or not. A lamp lit into a hallway already empty goes at
+  # 5 min. Any other waits for the first sweep after the wait, 10 to 15 min
+  # after the last presence [D: 9:30 wait + 30 s module hold + up to 5:00 sweep].
+  # A latched lamp is presence_off's, at the on-time exactly; it reaches this
+  # rule only if a reload or a restart cancelled that timer.
+  # So §4.2 rule 2 stops at the door here: a lamp a person lights is left alone
+  # while the radar sees them, and goes once they have gone.
+  # Triggers: the lamp switching on from `off`, held for the grace; and a sweep,
+  # the family's net for a cancelled timer, and the only trigger a lamp already
+  # on when the hallway empties gets. A restart resets both last_changed, so the
+  # sweep then waits the whole time again. :22 shares a second with no other
+  # sweep in this file.
+  # THE GRACE, 5 min, and the 120 s below are the family's choices, for the
+  # family's reasons. Neither is measured in this hallway.
+  # THE GUARD is the family's, plus `seen <= lit`. A lamp switched back on within
+  # 120 s after the package's own command, latch off, is a correction: left on,
+  # not fought. The family's exempt lamp waits for the next empty edge, because
+  # its presence_off takes any lamp. The hallway's does not, and a sweep re-reads
+  # the same two timestamps for ever, so without `seen <= lit` a correction
+  # would be the lamp that never goes off. The radar changing after the re-light
+  # ends the exemption, and the next wait takes the lamp.
+  # LIMITS. Raw radar, as in presence_off: `unavailable` holds the lamp, so a node
+  # with no power leaves it on. A person the radar misses gets the lamp switched
+  # off, and again 5 min after any re-light more than 120 s later, each logged.
+  # A restart ends an exemption: last_changed resets, so `d` no longer fits.
+  - id: mmw_hallway_lit_empty_off
+    alias: "mmW Hallway: lamp on in an empty hallway -> off"
+    mode: single
+    max_exceeded: silent
+    trigger:
+      - platform: state
+        entity_id: switch.hallway_lamp
+        # A return from `unavailable` is the plug reconnecting, not the lamp
+        # coming on; the sweep covers a lamp that was on across it.
+        from: "off"
+        to: "on"
+        # `&mmw_hallway_lit_empty_grace` is reused by the condition below (R10).
+        for: &mmw_hallway_lit_empty_grace "00:05:00"
+        id: lamp_on
+      - platform: time_pattern
+        minutes: "/5"
+        seconds: 22
+        id: sweep
+    condition:
+      # The lamp_on trigger has proved this already; the sweep has no other test.
+      - condition: state
+        entity_id: switch.hallway_lamp
+        state: "on"
+        for: *mmw_hallway_lit_empty_grace
+      - condition: and
+        conditions: *mmw_hallway_empty_conds
+      - condition: state
+        entity_id: binary_sensor.hallway_mmwave_presence
+        state: "off"
+        for: *mmw_hallway_off_wait
+    action:
+      # THE GUARD (above). `lit - stamp` as in mmw_office_lit_empty_off.
+      - if:
+          - condition: template
+            value_template: >
+              {% set stamp = as_timestamp(states('input_datetime.mmw_hallway_last_cmd'), 0) %}
+              {% set lit = as_timestamp(states.switch.hallway_lamp.last_changed, 0) %}
+              {% set seen = as_timestamp(states.binary_sensor.hallway_mmwave_presence.last_changed, 0) %}
+              {{ is_state('input_boolean.mmw_hallway_latch', 'off')
+                 and 0 <= lit - stamp <= 120 and seen <= lit }}
+        then:
+          # Logged once, at the lamp's own trigger, not every 5 min by the sweep.
+          - if:
+              - condition: template
+                value_template: "{{ trigger.id == 'lamp_on' }}"
+            then:
+              - service: logbook.log
+                data:
+                  name: "mmW Hallway"
+                  message: >
+                    lamp switched back on within 120 s of the package's own
+                    command, in a hallway that reads empty - left on, not fought
+          - stop: "a correction of the package"
+      - service: script.mmw_hallway_lamp_set
+        data:
+          lamp_state: "off"
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.mmw_hallway_latch
+      - service: logbook.log
+        data:
+          name: "mmW Hallway"
+          message: >
+            lamp on in an empty hallway (radar off for the on-time) switched
+            off ({{ trigger.id }})
 
   - id: mmw_hallway_override_detect
     alias: "mmW Hallway: detect manual intervention"
