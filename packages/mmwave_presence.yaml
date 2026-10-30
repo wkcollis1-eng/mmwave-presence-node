@@ -19,6 +19,9 @@
 # -----------------------------------------------------------------------------
 # Two nodes, one package. Office (node 1) is basic presence lighting plus the
 # calibration capture. Family room (node 2) adds the overnight alarm.
+# CHANGED 2026-10-29: three nodes. Hallway (node 3, top of the stairs) is
+# presence lighting only, and judges darkness on the light BEFORE presence -
+# the stair light is already on when the radar first sees anyone (Bill).
 #
 # WHAT THIS PACKAGE IS FOR, in order of importance:
 #   1. Turn the light on when someone is present and the room is dark, without
@@ -103,6 +106,11 @@ input_boolean:
     name: "Family Room: automatic lighting enabled"
     icon: mdi:lightbulb-auto
     initial: true
+  # ADDED 2026-10-29 (hallway, node 3).
+  mmw_hallway_auto_enable:
+    name: "Hallway: automatic lighting enabled"
+    icon: mdi:lightbulb-auto
+    initial: true
 
   # THE LATCH (§4.2). True only when THIS automation turned the lamp on. The
   # off-automation refuses to touch a lamp it did not switch on, which is what
@@ -126,6 +134,11 @@ input_boolean:
   mmw_family_latch:
     name: "Family Room: lamp latched by presence"
     icon: mdi:lock-check
+  # ADDED 2026-10-29: the hallway latch has the OFFICE meaning - lamp-off
+  # (mmw_hallway_presence_off) touches only a lamp the package lit.
+  mmw_hallway_latch:
+    name: "Hallway: lamp latched by presence"
+    icon: mdi:lock-check
 
   # R4a. Set when the lamp changes state without this node commanding it.
   # Cleared when the room next goes EMPTY — never on a timer, because the whole
@@ -135,6 +148,9 @@ input_boolean:
     icon: mdi:hand-back-right
   mmw_family_manual_override:
     name: "Family Room: manual override active"
+    icon: mdi:hand-back-right
+  mmw_hallway_manual_override:        # ADDED 2026-10-29
+    name: "Hallway: manual override active"
     icon: mdi:hand-back-right
 
   # Overnight alarm, family room only.
@@ -267,6 +283,16 @@ input_number:
     unit_of_measurement: "lx"
     icon: mdi:brightness-5
   # REMOVED 2026-09-22: mmw_family_lux_off - same reason as the office one.
+  # ADDED 2026-10-29. Compared with the DARKEST reading of the 5 min before
+  # presence (sensor.mmw_hallway_lux_before_presence), not the reading at
+  # the edge, which is the stair light.
+  mmw_hallway_lux_on:
+    name: "Hallway: turn on below (lx)"
+    min: 0
+    max: 200
+    step: 0.5
+    unit_of_measurement: "lx"
+    icon: mdi:brightness-5
 
   # ---- idle timeouts, §5.5 -------------------------------------------------
   # THIS IS THE TOTAL ROOM HOLD, not the extra wait. The automations subtract
@@ -284,6 +310,18 @@ input_number:
     max: 1800
     step: 30
     unit_of_measurement: "s"
+    icon: mdi:timer-sand
+  # ADDED 2026-10-29, Bill: "turn lamp on for 10 minutes (user setable on the
+  # dash board)". MINUTES, not seconds, and the TOTAL counted from the last
+  # moment the radar saw anyone - so a person still in the hallway is not put
+  # in the dark at minute 10. The off automation subtracts the module's own
+  # hold, as the office does. 0 = uncommissioned: never lit, never switched off.
+  mmw_hallway_on_minutes:
+    name: "Hallway: lamp on for (min)"
+    min: 0
+    max: 60
+    step: 1
+    unit_of_measurement: "min"
     icon: mdi:timer-sand
 
   # ---- overnight alarm -----------------------------------------------------
@@ -346,6 +384,15 @@ input_number:
     step: 1
     unit_of_measurement: "s"
     icon: mdi:timer-check
+  # ADDED 2026-10-29. switch.hallway_lamp is a TP-Link HS103 (registry,
+  # 68:FF:7B:DC:57:20), the device class the office/family window was set for.
+  mmw_hallway_cmd_window:
+    name: "Hallway: command window (s)"
+    min: 0
+    max: 60
+    step: 1
+    unit_of_measurement: "s"
+    icon: mdi:timer-check
 
   mmw_family_alarm_cooldown:
     name: "Family Room: alarm cooldown (min)"
@@ -369,6 +416,10 @@ input_datetime:
     has_time: true
   mmw_family_last_cmd:
     name: "Family Room: last commanded change"
+    has_date: true
+    has_time: true
+  mmw_hallway_last_cmd:               # ADDED 2026-10-29
+    name: "Hallway: last commanded change"
     has_date: true
     has_time: true
 
@@ -395,6 +446,29 @@ input_datetime:
 # TEMPLATE — derived state, the calibration class, and the data-quality guards
 # -----------------------------------------------------------------------------
 template:
+  # ADDED 2026-10-29 - the hallway lux RE-SAMPLED every 30 s, so that
+  # sensor.mmw_hallway_lux_before_presence (statistics, sensor: below) sees the
+  # light HELD through its 5 min window, not only the moments it changed. Why it
+  # has to exist is the R13 note at that sensor. Not a second definition (R10):
+  # the state is the node's reading, passed through unchanged. A trigger-based
+  # entity writes on every trigger that renders [S: HA 2026.10.4
+  # template/trigger_entity.py 355-364], and an unchanged write is a
+  # state_reported, which statistics samples. Writes only itself, so it
+  # contends with nothing (docs/eod-timing.md). Recorder-excluded below.
+  - trigger:
+      - platform: state
+        entity_id: sensor.hallway_mmwave_ambient_light
+      - platform: time_pattern
+        seconds: "/30"
+    sensor:
+      - name: "mmW Hallway lux sampled"
+        unique_id: mmw_hallway_lux_sampled
+        unit_of_measurement: "lx"
+        availability: "{{ states('sensor.hallway_mmwave_ambient_light') not in ['unknown','unavailable','none',''] }}"
+        state: >
+          {% set v = states('sensor.hallway_mmwave_ambient_light') %}
+          {{ v | float(0) if v not in ['unknown','unavailable','none',''] else 0 }}
+
   - binary_sensor:
       # Quiet-hours window, computed once and reused. Handles the midnight
       # wrap, which is the whole difficulty: 01:00-05:00 does not wrap today,
@@ -1039,6 +1113,45 @@ template:
 # the duration of a collection; comment the block out afterwards.
 # -----------------------------------------------------------------------------
 sensor:
+  # ADDED 2026-10-29 - THE HALLWAY'S DARKNESS TEST. Bill: the stair light is on
+  # by the time the radar first sees someone, so the reading AT the presence
+  # edge is the stair light. This is the darkest reading of the last 5 min,
+  # which at the edge is the hallway before the stair light came on.
+  # The minimum, not a point sample from 5 min ago: the same answer when the
+  # hallway was steady, and the right one when a light went off inside the
+  # window or this package's own lamp has just switched off (R10: HA computes
+  # it; no hand-kept buffer).
+  # Read in HA 2026.10.4 components/statistics/sensor.py [S]: it samples on
+  # state_reported as well as state_changed (776-789), so the node's unchanged
+  # 10 s republish keeps ~30 samples in the window [D: 300 s / 10 s]; it reads
+  # unavailable while the source is, and keeps its buffer (804). Not in the
+  # history_stats COST NOTE below: it reads no recorder history after startup.
+  # R13, same evening, before it was deployed: "the node's unchanged 10 s
+  # republish keeps ~30 samples" was WRONG. HA's ESPHome integration DROPS a
+  # state identical to the last one unless the sensor has force_update [S: HA
+  # 2026.10.4 esphome/entry_data.py 459-470], so nothing reaches this sensor
+  # while the lux holds still - and in the dark it does: the family node held
+  # 0.324 lx unchanged for 430 s and 320 s [M: sensor.family_mmwave_ambient_light,
+  # 03:15 and 03:30 on 10-27, 6,047 changes in 24.0 h]. With the node as the
+  # source, a dark, still hallway aged its buffer to EMPTY; the first sample
+  # after the stair light came on was the lit one, so the minimum was the
+  # stair light and the lamp stayed off - on the night it was for.
+  # keep_last_sample does not save it: the new sample is queued BEFORE the
+  # purge (737-738, 998), so the kept dark one is purged the moment a second
+  # arrives. Hence the source is now sensor.mmw_hallway_lux_sampled (template:
+  # above), which writes every 30 s whether or not the light changed.
+  # Resolution is that 30 s: a dark spell shorter than one sample can be missed.
+  # After a restart the window fills over its first 5 min (the re-sampler is
+  # recorder-excluded, so there is no history to load).
+  - platform: statistics
+    name: "mmW Hallway lux before presence"
+    unique_id: mmw_hallway_lux_before_presence
+    entity_id: sensor.mmw_hallway_lux_sampled
+    state_characteristic: value_min
+    max_age:
+      minutes: 5
+    precision: 1
+
   - platform: history_stats
     name: "mmW Office hours empty"
     unique_id: mmw_office_hours_empty
@@ -1167,6 +1280,24 @@ script:
       - service: "homeassistant.turn_{{ lamp_state }}"
         target:
           entity_id: [switch.family_room, switch.family_room_2, switch.family_room_3]
+
+  mmw_hallway_lamp_set:               # ADDED 2026-10-29, the same one door
+    alias: "mmW Hallway: set lamp (stamped)"
+    mode: queued
+    max: 5
+    fields:
+      lamp_state:
+        description: "on or off"
+        example: "on"
+    sequence:
+      - service: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.mmw_hallway_last_cmd
+        data:
+          datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+      - service: "homeassistant.turn_{{ lamp_state }}"
+        target:
+          entity_id: switch.hallway_lamp
 
   # ---- the overnight alarm -------------------------------------------------
   mmw_family_alarm:
@@ -2513,6 +2644,206 @@ automation:
           notification_id: mmw_family_alarm
 
   # ===========================================================================
+  # HALLWAY — presence lighting, judged on the light BEFORE presence
+  # ===========================================================================
+  # ADDED 2026-10-29. Bill: "with lux low turn on switch.hallway_lamp. key is
+  # the stair light will be on so HA wil need the lux reading from ~5 mins
+  # before the it first sees presense and if below the theshold (user settab;e
+  # on the dashboard) will turn lamp on for 10 minutes (user setable on the
+  # dash board)."
+  # The office pattern - one door, latch, R4a override - with two differences:
+  #   1. DARKNESS is sensor.mmw_hallway_lux_before_presence, the darkest
+  #      reading of the last 5 min (statistics, sensor: above), not the
+  #      reading at the edge.
+  #   2. The hold is input_number.mmw_hallway_on_minutes, counted from the
+  #      last moment the radar saw anyone (the office's TIMEOUT ARITHMETIC).
+  # RAW radar presence throughout: the office's "occupied" template exists for
+  # a bathroom behind the wall, and nothing is known that the hallway needs one
+  # for. No lux_dim_on / lux_bright_off / lit_empty_off: not asked for.
+  - id: mmw_hallway_presence_on
+    alias: "mmW Hallway: presence -> lamp on"
+    mode: single
+    max_exceeded: silent
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.hallway_mmwave_presence
+        # From unavailable/unknown too - the office's reason (24 of 36 bench
+        # returns came back straight to `on`), see mmw_office_presence_on.
+        from: ["off", "unavailable", "unknown"]
+        to: "on"
+    condition:
+      - condition: state
+        entity_id: input_boolean.mmw_hallway_auto_enable
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.mmw_hallway_manual_override
+        state: "off"
+      # Latch only a lamp this automation lit (the office's reason).
+      - condition: template
+        value_template: "{{ not is_state('switch.hallway_lamp','on') }}"
+      # §7: a dead light sensor must not read as "dark" (the office's reason).
+      - condition: template
+        value_template: "{{ not is_state('binary_sensor.hallway_mmwave_lux_stale','on') }}"
+      # Uncommissioned (0) threshold or hold: act on neither. A 0 hold would
+      # otherwise light a lamp that presence_off then refuses to switch off.
+      - condition: template
+        value_template: >
+          {{ states('input_number.mmw_hallway_lux_on') | float(0) > 0
+             and states('input_number.mmw_hallway_on_minutes') | float(0) > 0 }}
+    action:
+      # The statistics sensor is unavailable while the VEML7700 is, and unknown
+      # with an empty buffer. Wait for a number, as the office waits for lux.
+      - wait_template: "{{ states('sensor.mmw_hallway_lux_before_presence') | is_number }}"
+        timeout: "00:00:30"
+        continue_on_timeout: true
+      - if:
+          - condition: template
+            value_template: "{{ not wait.completed }}"
+        then:
+          - service: logbook.log
+            data:
+              name: "mmW Hallway"
+              message: "presence, but no lux history within 30 s - lamp left alone"
+          - stop: "no lux history"
+      - variables:
+          pre: "{{ states('sensor.mmw_hallway_lux_before_presence') | float(999) }}"
+          line: "{{ states('input_number.mmw_hallway_lux_on') | float(0) }}"
+      # Every decision is logged with both readings - the evidence for setting
+      # lux_on, and for telling "it was lit" from "it never fired".
+      - service: logbook.log
+        data:
+          name: "mmW Hallway"
+          message: >
+            presence: darkest of the last 5 min {{ pre }} lx, now
+            {{ states('sensor.hallway_mmwave_ambient_light') }} lx, line
+            {{ line }} lx -> {{ 'lamp on' if pre < line else 'lit, lamp left off' }}
+      - condition: template
+        value_template: >
+          {{ is_state('binary_sensor.hallway_mmwave_presence','on') and pre < line }}
+      - service: script.mmw_hallway_lamp_set
+        data:
+          lamp_state: "on"
+      - service: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.mmw_hallway_latch
+
+  - id: mmw_hallway_presence_off
+    alias: "mmW Hallway: empty -> lamp off"
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.hallway_mmwave_presence
+        # The office's reasons: the lamp holds while the node is offline, and
+        # is released after a full observed-empty wait once it is back.
+        from: ["on", "unavailable", "unknown"]
+        to: "off"
+        # TIMEOUT ARITHMETIC, as the office, in minutes: the module already
+        # held presence for its own timeout, so that time is spent. Subtract,
+        # floor at zero. Reused by mmw_hallway_override_release (R10).
+        for: &mmw_hallway_off_wait >
+          {% set total = states('input_number.mmw_hallway_on_minutes') | float(0) * 60 %}
+          {% set mod   = states('number.hallway_mmwave_radar_timeout') | float(30) %}
+          {% set w     = [total - mod, 0] | max | int(0) %}
+          {{ '%02d:%02d:%02d' % (w // 3600, (w % 3600) // 60, w % 60) }}
+    condition: &mmw_hallway_empty_conds
+      - condition: state
+        entity_id: input_boolean.mmw_hallway_auto_enable
+        state: "on"
+      # 0 minutes = uncommissioned = never switch off (the office's rule).
+      - condition: template
+        value_template: "{{ states('input_number.mmw_hallway_on_minutes') | float(0) > 0 }}"
+    action:
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.mmw_hallway_manual_override
+      # Only switch off a lamp this automation switched on.
+      - condition: state
+        entity_id: input_boolean.mmw_hallway_latch
+        state: "on"
+      - service: script.mmw_hallway_lamp_set
+        data:
+          lamp_state: "off"
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.mmw_hallway_latch
+
+  # The office's stale-override net (mmw_office_override_release, 2026-10-09),
+  # for the same structural reason. 5 min is a CHOICE; :02 keeps it off the
+  # office :47 and family :17 / :32 sweeps. Touches hallway helpers only.
+  - id: mmw_hallway_override_release
+    alias: "mmW Hallway: release a stale override"
+    mode: single
+    max_exceeded: silent
+    trigger:
+      - platform: state
+        entity_id: input_boolean.mmw_hallway_manual_override
+        to: "on"
+        id: override_set
+      - platform: time_pattern
+        minutes: "/5"
+        seconds: 2
+        id: sweep
+    condition:
+      - condition: state
+        entity_id: input_boolean.mmw_hallway_manual_override
+        state: "on"
+      - condition: and
+        conditions: *mmw_hallway_empty_conds
+      - condition: state
+        entity_id: binary_sensor.hallway_mmwave_presence
+        state: "off"
+        for: *mmw_hallway_off_wait
+    action:
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.mmw_hallway_manual_override
+      - service: logbook.log
+        data:
+          name: "mmW Hallway"
+          message: >
+            stale manual override released ({{ trigger.id }}): the hallway is
+            empty (radar off for the on-time)
+
+  - id: mmw_hallway_override_detect
+    alias: "mmW Hallway: detect manual intervention"
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: switch.hallway_lamp
+        to: ["on", "off"]
+    condition:
+      # Not our own command - the office's window test, unchanged.
+      - condition: template
+        value_template: >
+          {% set stamp  = states('input_datetime.mmw_hallway_last_cmd') %}
+          {% set window = states('input_number.mmw_hallway_cmd_window') | float(0) %}
+          {% if window <= 0 %}
+            false
+          {% elif stamp in ['unknown','unavailable',''] %}
+            true
+          {% else %}
+            {{ (as_timestamp(now()) - as_timestamp(stamp)) > window }}
+          {% endif %}
+      - condition: template
+        value_template: >
+          {{ trigger.from_state is not none
+             and trigger.from_state.state in ['on','off'] }}
+    action:
+      - service: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.mmw_hallway_manual_override
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.mmw_hallway_latch
+      - service: logbook.log
+        data:
+          name: "mmW Hallway"
+          message: >
+            manual intervention detected ({{ trigger.from_state.state }} ->
+            {{ trigger.to_state.state }}); automatic control suspended until the
+            hallway is next empty
+
+  # ===========================================================================
   # CALIBRATION SUPPORT
   # ===========================================================================
   # Selecting any label except "unlabelled" starts a labelled run: engineering
@@ -2716,6 +3047,7 @@ automation:
         entity_id:
           - binary_sensor.office_mmwave_presence_path_disagreement
           - binary_sensor.family_mmwave_presence_path_disagreement
+          - binary_sensor.hallway_mmwave_presence_path_disagreement
         to: "on"
         for: "00:05:00"
     action:
@@ -2738,6 +3070,7 @@ automation:
         entity_id:
           - binary_sensor.office_mmwave_lux_stale
           - binary_sensor.family_mmwave_lux_stale
+          - binary_sensor.hallway_mmwave_lux_stale
         to: "on"
     action:
       - service: persistent_notification.create
@@ -2785,6 +3118,10 @@ automation:
   #                      above it [D].
   #   alarm 6 / 20 s / 15 min   flashes / grace / cooldown, see the alarm
   #                      notes. Chosen, not measured.
+  #   hallway 18 lx / 10 min / 10 s   ADDED 2026-10-29. lux_on is the
+  #                      office's provisional 18 lx (§5.6), NOT measured for
+  #                      this room - set it from the logbook's "darkest of the
+  #                      last 5 min" lines. 10 min is Bill's. 10 s: same HS103.
   - id: mmw_seed_uncommissioned_helpers
     alias: "mmW: seed uncommissioned helpers"
     mode: queued
@@ -2801,6 +3138,9 @@ automation:
         input_number.mmw_family_idle_timeout: 300
         input_number.mmw_office_cmd_window: 10
         input_number.mmw_family_cmd_window: 10
+        input_number.mmw_hallway_lux_on: 18        # ADDED 2026-10-29
+        input_number.mmw_hallway_on_minutes: 10    # ADDED 2026-10-29, Bill
+        input_number.mmw_hallway_cmd_window: 10    # ADDED 2026-10-29
         input_number.mmw_family_alarm_flashes: 6
         input_number.mmw_family_alarm_grace: 20
         input_number.mmw_family_alarm_cooldown: 15
@@ -2896,3 +3236,13 @@ recorder:
       - sensor.family_mmwave_detection_distance
       - sensor.family_mmwave_moving_energy
       - sensor.family_mmwave_still_energy
+      # hallway (ADDED 2026-10-29): excluded from the first day - nothing reads
+      # their history, and the distances are unthrottled (filters: []).
+      - sensor.hallway_mmwave_moving_distance
+      - sensor.hallway_mmwave_still_distance
+      - sensor.hallway_mmwave_detection_distance
+      - sensor.hallway_mmwave_moving_energy
+      - sensor.hallway_mmwave_still_energy
+      # The 30 s re-sampler (ADDED 2026-10-29): its changes are the node's own,
+      # already recorded as sensor.hallway_mmwave_ambient_light.
+      - sensor.mmw_hallway_lux_sampled
