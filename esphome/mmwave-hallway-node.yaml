@@ -1,0 +1,99 @@
+# =============================================================================
+# NODE 3 — HALLWAY (top of the stairs)
+# -----------------------------------------------------------------------------
+# This file contains NOTHING but substitutions and this node's own API key -
+# the same contract as the office and family files. All behaviour is in
+# mmwave-node-common.yaml, which all three nodes share byte for byte.
+# Plus, from its first boot (2026-10-29), the address the tooling uses to
+# reach it (wifi: use_address).
+#
+# ADDED 2026-10-29. Bill: "want to add a 3rd mmWave unit - Hallway. The sensor
+# will be at the top of the stairs and with lux low turn on
+# switch.hallway_lamp." Same hardware as nodes 1 and 2 - XIAO ESP32-C3,
+# HLK-LD2410C and Adafruit VEML7700 (4162) on the same PCB.
+#
+# WHAT IS DIFFERENT ABOUT THIS ROOM IS DECIDED IN HA, NOT HERE. Bill: "the
+# stair light will be on" by the time the radar first sees someone coming up,
+# so the VEML7700 reading AT the presence edge is the stair light, not the
+# hallway. The package judges darkness on the darkest reading of the 5 minutes
+# BEFORE the edge (a statistics sensor in packages/mmwave_presence.yaml). That
+# needs nothing from the firmware beyond what it already does - a reading every
+# 10 s, 30 samples in the window - so the firmware stays shared.
+#
+# BEFORE FIRST POWER-ON, as for nodes 1 and 2:
+#   * design doc §9 item 1 (§5.0 step 0.0): inspect the radar module. A 3.3 V-
+#     only "v1.1" on this board's VBUS-fed pin 1 needs the trace cut first.
+#   * the VEML7700 power-LED jumper is CUT (common file, veml7700 block). It
+#     matters more here than in the other rooms: this node's one decision is a
+#     DARK-hallway reading, where a constant LED offset is the largest fraction
+#     of the number.
+# =============================================================================
+
+substitutions:
+  node_name: mmwave-hallway-node
+  friendly: Hallway mmWave
+  room_name: Hallway
+  room_slug: hallway
+  # Same mmwave-node-common.yaml as the office and family nodes, which report 0.4.
+  fw_version: "0.4"
+
+  # The MODULE's own hold only. How long the lamp stays on after the hallway
+  # empties is the room total, input_number.mmw_hallway_on_minutes in HA
+  # (Bill: 10 min, dashboard-settable), and the package subtracts this from it
+  # so the two do not add (TIMEOUT ARITHMETIC in the common file).
+  radar_timeout_s: "30"
+
+  # DECIDED 2026-10-29, Bill: "unit will sit on a table about 42" tall looking
+  # at the stair case. will need to see presense within 8'." 8 ft is 2.44 m,
+  # inside gate 3 (2.25-3.00 m: gate n spans 0.75n to 0.75(n+1) m, the family
+  # file's convention), so gate 3 is the first gate beyond it and ends 0.56 m
+  # past it [D: 3.00 - 2.44].
+  # R13, same day: the first version of this file said "Gate 4 ends at 3.0 m"
+  # and kept 4 / 4. Gate 4 is 3.00-3.75 m; it would have reached 1.31 m past
+  # the 8 ft asked for [D: 3.75 - 2.44].
+  # NOT MEASURED. The radar reads SLANT range. From 42 in up, looking down the
+  # stairs, someone coming up is below the sensor, so the slant range to a
+  # person 8 ft out along the floor is longer than 8 ft. If the lamp is late
+  # for someone coming up the stairs, the §5.2 walk test is the evidence for
+  # gate 4, not this arithmetic.
+  max_move_gate: "3"
+  max_still_gate: "3"
+
+  gate_log_period: "5"
+
+  # Daily SPC window: 04:10. The office opens at 03:10 and the family room at
+  # 03:40, 10 minutes each; 30 minutes after the family keeps the three
+  # 18-series bursts off the recorder at the same time, the spacing those two
+  # already use (family file).
+  eng_window_hour: "4"
+  eng_window_minute: "10"
+
+  # --- COMMISSIONED GATE THRESHOLDS -----------------------------------------
+  # UNCALIBRATED. Hi-Link factory defaults inherited from the common file.
+
+esphome:
+  name: ${node_name}
+
+api:
+  encryption:
+    key: !secret api_key_mmwave_hallway_node
+
+# wifi: use_address - was NOT YET until the first boot. The office and family
+# files carry the address the Device Builder add-on reaches them at, because it
+# has no mDNS resolver (office file, same block). This node had no address
+# until its first boot took a DHCP lease. Added then, with a DHCP reservation
+# in the router, BEFORE the first wireless Install. The first flash was over
+# USB and needed none.
+wifi:
+  # 10.0.0.143 is where this MAC (1C:DB:D4:EB:E5:34) answered after its first
+  # boot [M: mDNS and the node's own device_info, 2026-10-29 21:36] and the
+  # host HA's config entry for it connects to [M: core.config_entries, read
+  # only, same evening]. Compiled in only as the "Address:" line of the API
+  # and OTA config dumps (office file, [S]) - it changes nothing the device
+  # does, so this edit alone needs no reflash.
+  # Bill, 2026-10-29: "added to HA, reserved at 10.0.0.143" - the DHCP
+  # reservation, made in the router; without it this goes stale.
+  use_address: 10.0.0.143
+
+packages:
+  common: !include mmwave-node-common.yaml
