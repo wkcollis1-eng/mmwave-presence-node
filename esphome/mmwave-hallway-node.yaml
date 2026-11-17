@@ -70,6 +70,22 @@ substitutions:
 
   # --- COMMISSIONED GATE THRESHOLDS -----------------------------------------
   # UNCALIBRATED. Hi-Link factory defaults inherited from the common file.
+  #
+  # ONE MEASURED EXCEPTION, 2026-11-16 (Bill: "Nothing in front. move
+  # threshold from 50 to about 70"): gate 0 move 50 -> 70, the office's P25
+  # fix. From 11-13 11:00, 172 presence edges were single gate-0 blips at
+  # 11.8 in: published moving energy 31-69, still energy about 7-22, each
+  # held exactly the 30 s module timeout. 11-10 to 11-12 had 0, 0 and 1 [M:
+  # Influx hallway_mmwave_moving_distance and _moving_energy, HA history].
+  # Real walk-throughs sit at 55-60 in, energy 83-100 [M]. Bill: nothing is
+  # within a foot of the node. Set live 2026-11-16 20:16 local (01:16Z).
+  # It lives HERE because push_commissioned_state rewrites every gate at each
+  # boot, so a value set only through the number entity reverts to 50.
+  # Limits: moving energy is published through a 1 s throttle, so 69 is a
+  # floor on the ghosts' peak, not the peak; what a person inside 0.75 m
+  # reads at gate 0 is unmeasured. Still not a section 5.9 calibration - the
+  # sweep's output block replaces this line along with the rest.
+  g0_move: "70"
 
 esphome:
   name: ${node_name}
